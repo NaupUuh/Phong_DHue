@@ -62,8 +62,9 @@ Script tự: kiểm tra version lớn hơn → ghi `version.json` → ghi `APP_V
 - Cache: `%LOCALAPPDATA%\VideoStoryPublisher\V23.6\`
 
 ## Việc còn lại
-- **Chờ user quyết:** nới giới hạn tên file 219 → 240 ký tự? (ví dụ user gửi dài
-  220 ký tự nên bị cắt `Impossible` → `Impossibl`; đây là hành vi CÓ SẴN từ bản gốc).
+- **ĐÃ QUYẾT (2026-10-05): GIỮ giới hạn 219 ký tự** — user chọn an toàn với Windows
+  + ổ mạng, chấp nhận việc tool cắt bớt tiêu đề khi quá dài. **KHÔNG nới lên 240.**
+  Đừng đề xuất lại trừ khi user hỏi.
 - **Chưa rõ nguyên nhân:** file config ADung từng bị ghi đè thành 3 khoá
   (`vilao_api_key` giả `KEY_THAT_CUA_ANH`, `site_id`, `category`) lúc 10:43.
   Config đã tự khôi phục đủ 58 khoá + key thật. Không phải do test của mình.
