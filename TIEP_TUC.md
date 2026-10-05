@@ -106,6 +106,26 @@ python release.py 23.7.0 "Mô tả"
 python sync_z.py
 ```
 
+### Fix 2026-10-05 (v23.6.4) — CON LAN CHUOT
+- **Trieu chung:** lan chuot o vung nen (ngoai cac o nhap) KHONG cuon trang; chi cuon duoc khi
+  tro nam trong o Text/Listbox. Phai keo thanh truot tay moi xuong duoc.
+- **Nguyen nhan:** `tk.Canvas` KHONG tu an su kien `<MouseWheel>` (khac `Text`/`Listbox`).
+  Trang chi cuon duoc neu tro tinh co nam tren widget co scroll rieng -> vung nen chet.
+- **FIX (3 phan):**
+  1. Luu canvas: `self.content_canvas = canvas` (dong ~4059).
+  2. `self.bind_all("<MouseWheel>", self._on_mousewheel, add="+")` (dong ~4075).
+  3. Them `_on_mousewheel()` + `_scroll_content()` (~dong 5248):
+     - `winfo_containing()` -> di nguoc chuoi `master`; gap `Text`/`Listbox` -> `return None`
+       (nhuong quyen cho o do tu cuon).
+     - Chi cuon khi diem nam TRONG `content_canvas` (chan `bind_all` cuon nham khi popup mo).
+     - `winfo_containing()` tra `None` -> fallback so sanh toa do voi khung canvas.
+     - Het scroll (`first<=0 and last>=1`) -> `return None`, khong an su kien vo ich.
+- **BAI HOC:** moi `tk.Canvas` lam khung cuon deu PHAI bind `<MouseWheel>` thu cong;
+  dung `bind_all` + kiem tra widget duoi con tro de khong giat quyen cua `Text`/`Listbox`.
+- Da test: ngoai o nhap (xuong+len) OK, trong Text nhuong quyen OK,
+  trong popup khong cuon canvas chinh OK, khong crash log.
+- Da release v23.6.4 + sync Z 12/12 MD5 khop.
+
 ## Lưu ý
 - API key (Vilao / ElevenLabs / Gemini) **chỉ nhập trong ô GUI**, KHÔNG đọc từ `.env`, KHÔNG hardcode trong file.
 - Config **không** bị cập nhật ghi đè — `updater.py` chỉ ghi đè file thuộc repo.
