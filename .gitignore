@@ -1,0 +1,33 @@
+# =====================================================================
+#  KHONG day len GitHub: cai dat rieng + API KEY + bai da render
+# =====================================================================
+config.json
+.video_story_publisher*.json
+
+# bai + anh + video da render
+output/
+Story Outputs/
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.webm
+*.wav
+*.mp3
+*.m4a
+
+# sao luu khi cap nhat
+_backup_update/
+
+# rac Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# log loi
+*.log
+*.bak
+*.part
