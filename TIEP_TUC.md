@@ -65,6 +65,11 @@ Script tự: kiểm tra version lớn hơn → ghi `version.json` → ghi `APP_V
 - **ĐÃ QUYẾT (2026-10-05): GIỮ giới hạn 219 ký tự** — user chọn an toàn với Windows
   + ổ mạng, chấp nhận việc tool cắt bớt tiêu đề khi quá dài. **KHÔNG nới lên 240.**
   Đừng đề xuất lại trừ khi user hỏi.
+- **ĐÃ QUYẾT (2026-10-05): KHÔNG mã hoá / không che code.** User đã cân nhắc và
+  bỏ qua. Đã test thật: PyArmor trial **KHÔNG** làm nổi file 266 KB (`out of
+  license`, giới hạn ~32 KB); `.pyc` dễ dịch ngược; đóng gói `.exe` sẽ **làm chết
+  nút Cập nhật** (updater ghi file `.py` rồi chạy lại `sys.executable + .py`).
+  Repo vẫn để **public** như hiện tại. **Đừng đề xuất lại** trừ khi user hỏi.
 - **Chưa rõ nguyên nhân:** file config ADung từng bị ghi đè thành 3 khoá
   (`vilao_api_key` giả `KEY_THAT_CUA_ANH`, `site_id`, `category`) lúc 10:43.
   Config đã tự khôi phục đủ 58 khoá + key thật. Không phải do test của mình.
