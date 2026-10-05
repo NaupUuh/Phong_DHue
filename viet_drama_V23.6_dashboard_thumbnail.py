@@ -227,7 +227,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.3"
+APP_VERSION = "23.6.4"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -4056,6 +4056,7 @@ class App(tk.Tk):
         self.content_shell = ttk.Frame(self)
         self.content_shell.pack(fill="both", expand=True)
         canvas = tk.Canvas(self.content_shell, highlightthickness=0)
+        self.content_canvas = canvas
         vertical = ttk.Scrollbar(self.content_shell, orient="vertical", command=canvas.yview)
         horizontal = ttk.Scrollbar(self.content_shell, orient="horizontal", command=canvas.xview)
         self.content_shell.rowconfigure(0, weight=1)
@@ -4069,6 +4070,9 @@ class App(tk.Tk):
         top.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind("<Configure>", lambda event: canvas.itemconfigure(
             content_id, width=max(1080, event.width)))
+        # Canvas does not consume the wheel by itself: bind it app-wide and
+        # route to the page unless the pointer is over a self-scrolling widget.
+        self.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
         self.bind("<Configure>", self._resize_view, add="+")
         self.after(1000, self._tick_timing)
 
@@ -5240,6 +5244,63 @@ class App(tk.Tk):
         minutes, seconds = divmod(remainder, 60)
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
+
+    def _on_mousewheel(self, event):
+        """Route the wheel to the main canvas unless the pointer is over a
+        widget that scrolls on its own (Text / Listbox / Combobox dropdown)."""
+        try:
+            w = self.winfo_containing(event.x_root, event.y_root)
+        except Exception:
+            w = None
+        if w is None:
+            # winfo_containing can miss; fall back to a bounds check so the
+            # wheel never dies silently over the page background.
+            try:
+                left = self.content_canvas.winfo_rootx()
+                top = self.content_canvas.winfo_rooty()
+                right = left + self.content_canvas.winfo_width()
+                bottom = top + self.content_canvas.winfo_height()
+                if not (left <= event.x_root <= right and top <= event.y_root <= bottom):
+                    return None
+            except Exception:
+                return None
+            return self._scroll_content(event)
+        # Walk up the widget chain: if any ancestor handles scrolling, leave
+        # the event alone so that widget scrolls its own content.
+        node = w
+        inside_main = False
+        while node is not None:
+            if isinstance(node, (tk.Text, tk.Listbox)):
+                return None
+            if isinstance(node, tk.Canvas) and node is self.content_canvas:
+                inside_main = True
+                break
+            try:
+                node = node.master
+            except Exception:
+                break
+        # bind_all is application-wide: the pointer may be over a separate
+        # Toplevel (e.g. the category picker). Only scroll the main page when
+        # the pointer is actually inside this window's scrollable content.
+        if not inside_main:
+            return None
+        return self._scroll_content(event)
+
+    def _scroll_content(self, event):
+        """Scroll the main canvas by the wheel delta, if it can move."""
+        if not self.content_shell.winfo_ismapped():
+            return None
+        canvas = self.content_canvas
+        try:
+            first, last = canvas.yview()
+            if first <= 0.0 and last >= 1.0:
+                return None  # nothing to scroll
+        except Exception:
+            return None
+        delta = -1 if event.delta > 0 else 1
+        step = max(1, int(abs(event.delta) / 120)) * 3
+        canvas.yview_scroll(delta * step, "units")
+        return "break"
 
     def _apply_view(self):
         compact = self.compact_override

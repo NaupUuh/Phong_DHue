@@ -1,5 +1,5 @@
 {
-  "version": "23.6.3",
-  "notes": "Sua updater: doc version.json theo dung commit (khong dinh cache GitHub)",
+  "version": "23.6.4",
+  "notes": "Fix con lan chuot: them binding MouseWheel cho canvas chinh (cuon duoc o vung nen, khong chi trong o nhap)",
   "date": "2026-10-05"
 }
