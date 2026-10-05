@@ -106,6 +106,17 @@ python release.py 23.7.0 "Mô tả"
 python sync_z.py
 ```
 
+### Fix 2026-10-05 (v23.6.5) — GOM O "CAU CHEN" VAO TAB KICH BAN & PROMPT
+- **Yeu cau:** o "Cau chen trong ten file" nam rieng o vung Source lam trang cao. Gom xuong tab
+  "Kich ban & Prompt" thanh **3 o canh nhau**.
+- **Cach lam:** xoa label+editor khoi `source`; them `phrase_panel` (LabelFrame "Câu chèn trong
+  tên file") vao `prompt_tab` column=2 + `columnconfigure(2, weight=1, uniform="editors")`.
+  `script_panel` padx `(5,0)` -> `(5,5)`. Editor height 6, width 32.
+- **Giu nguyen bien:** `self.filename_phrase_editor`; save `cfg["filename_phrase_list"]` khong doi.
+- **Chieu cao:** notebook prompt_tab = 190, panel h=180, reqh ~160 => khong bi cat (do bang `probe_h.py`).
+- **Test:** `smoke_3panel_dhue.py` — 3 panel cot 0/1/2, mapped, save roundtrip dung.
+- **Luu y CRLF:** file CRLF; `patch` khoi dai hay truot — cat nho tung khoi.
+
 ### Fix 2026-10-05 (v23.6.4) — CON LAN CHUOT
 - **Trieu chung:** lan chuot o vung nen (ngoai cac o nhap) KHONG cuon trang; chi cuon duoc khi
   tro nam trong o Text/Listbox. Phai keo thanh truot tay moi xuong duoc.
