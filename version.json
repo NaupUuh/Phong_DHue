@@ -1,5 +1,5 @@
 {
-  "version": "23.6.2",
-  "notes": "Them o 'Cau chen trong ten file': moi dong 1 cau, chon ngau nhien 1 cau thay 'full story'",
+  "version": "23.6.3",
+  "notes": "Sua updater: doc version.json theo dung commit (khong dinh cache GitHub)",
   "date": "2026-10-05"
 }

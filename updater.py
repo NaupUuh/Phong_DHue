@@ -37,9 +37,18 @@ MAIN_FILE = BASE / "viet_drama_V23.6_dashboard_thumbnail.py"
 
 # Đọc version.json qua API (KHÔNG dùng raw.githubusercontent — raw bị CDN
 # cache ~5 phút nên bấm Cập nhật ngay sau khi push sẽ thấy bản CŨ rồi báo
-# "đã mới nhất"). API trả dữ liệu tươi; raw chỉ là phương án dự phòng.
+# "đã mới nhất").
+#
+# API đọc theo NHÁNH (contents?ref=main) vẫn có thể trả bản cache vài giây.
+# Nên đường chính là: hỏi commit MỚI NHẤT có đụng version.json, rồi đọc
+# version.json Ở ĐÚNG COMMIT ĐÓ (?ref=<sha>) — nội dung theo sha là BẤT BIẾN,
+# GitHub không bao giờ trả bản cũ. Các đường dưới chỉ là dự phòng.
 VERSION_API = (f"https://api.github.com/repos/{REPO}/contents/version.json"
                f"?ref={BRANCH}")
+VERSION_API_SHA = (f"https://api.github.com/repos/{REPO}/contents/version.json"
+                   f"?ref=")
+VERSION_COMMITS_API = (f"https://api.github.com/repos/{REPO}/commits"
+                       f"?path=version.json&per_page=1&sha={BRANCH}")
 VERSION_URL = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/version.json"
 # Dùng API zipball, KHÔNG dùng codeload (archive/refs/heads/main.zip):
 # codeload cũng bị CDN cache -> tải phải bản cũ. API zipball luôn tươi.
@@ -175,9 +184,31 @@ def _get(url: str, timeout: int = TIMEOUT) -> bytes:
         return r.read()
 
 
+def _version_from_commit() -> dict:
+    """Đọc version.json Ở ĐÚNG commit mới nhất của nhánh.
+
+    Nội dung theo sha là bất biến -> không bao giờ dính cache, kể cả vừa push
+    xong. Đây là đường chính để bấm Cập nhật là thấy ngay bản vừa phát hành.
+    """
+    cs = json.loads(_get(VERSION_COMMITS_API).decode("utf-8", "replace"))
+    sha = cs[0]["sha"]
+    j = json.loads(_get(VERSION_API_SHA + sha).decode("utf-8", "replace"))
+    raw = base64.b64decode(j.get("content", "")).decode("utf-8", "replace")
+    return json.loads(raw)
+
+
 def _read_version_json() -> dict:
-    """Đọc version.json từ repo. Ưu tiên API (tươi), lỗi thì dùng raw."""
+    """Đọc version.json từ repo, tươi nhất có thể.
+
+    1. version.json ở đúng commit mới nhất  (bất biến, không cache)
+    2. contents API theo nhánh             (có thể cache vài giây)
+    3. raw.githubusercontent               (CDN cache ~5 phút)
+    """
     last = None
+    try:
+        return _version_from_commit()
+    except Exception as e:
+        last = e
     try:
         j = json.loads(_get(VERSION_API).decode("utf-8", "replace"))
         raw = base64.b64decode(j.get("content", "")).decode("utf-8", "replace")
