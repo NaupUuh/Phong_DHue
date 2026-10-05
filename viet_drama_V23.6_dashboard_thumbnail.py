@@ -227,7 +227,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.1"
+APP_VERSION = "23.6.2"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -342,12 +342,25 @@ PREVIOUS_FIRST_PERSON_STORY_RULES = FIRST_PERSON_STORY_RULES.replace(
     "Use warm, direct, believable storytelling with full paragraphs, usually 2-5 sentences each. Give actions context and let emotion come through decisions, concrete sensations, and restrained reflection. Weave dialogue into the narrator's account, with clear speakers; do not present an endless list of isolated lines or a screenplay transcript. A short standalone sentence is fine for an exceptional turn, but never make it the default rhythm. Avoid melodramatic all-caps, camera directions, montage language, rhetorical filler, and repeated cliffhanger fragments.",
 )
 
+# Câu chèn giữa caption và link bài viết trong TÊN FILE video.
+# Mỗi dòng là 1 câu; tool chọn ngẫu nhiên 1 câu cho mỗi video.
+# Để trống = giữ nguyên "full story" như bản cũ.
+DEFAULT_FILENAME_PHRASES = "\n".join([
+    "PART 2 & FULL ENDING",
+    "WATCH THE NEXT PART HERE",
+    "WHAT HAPPENS NEXT? WATCH HERE",
+    "WATCH THE FULL DRAMA HERE",
+    "SEE HOW IT ALL ENDS",
+    "CONTINUE WATCHING HERE",
+])
+
 DEFAULT_CONFIG = {
     "vilao_base_url": "https://api.vilao.ai/v1",
     "vilao_api_key": "",
     "vision_model": "gpt-5.5",
     "writer_model": "gpt-6-sol",
     "story_prompt_text": DEFAULT_STORY_PROMPT,
+    "filename_phrase_list": DEFAULT_FILENAME_PHRASES,
     "smarttraffic_api_key": "",
     "site_id": "120",
     "category_id": "1747",
@@ -422,6 +435,11 @@ HƯỚNG DẪN VIDEO STORY PUBLISHER
    trên website; API publish chỉ tạo bài, không chuyển theme của website.
  8. Nut "Cap nhat" (goc phai thanh nut): kiem tra ban moi tren GitHub va tu
     dong cap nhat. Cai dat + API key + bai da lam KHONG bi mat khi cap nhat.
+ 9. O "Cau chen trong ten file": moi dong 1 cau, tool chon ngau nhien 1 cau
+    dat giua caption va link bai viet trong TEN FILE video (vi du
+    "...;PART 2 & FULL ENDING https...article123.mp4"). De trong = "full story".
+    Luu y: ten file Windows khong cho phep cac ky tu dac biet (? * : / gach
+    cheo nguoc < > |) nen tool tu thay bang dau cach.
 """
 
 
@@ -473,7 +491,7 @@ def find_unpublished_videos(folder: Path) -> List[Path]:
     """Scan the selected directory and its children; skip renamed finished videos."""
     return sorted((p for p in folder.rglob("*") if p.is_file()
                    and p.suffix.lower() in VIDEO_EXTS
-                   and not re.search(r";full story https?[^ ]+article\d+$", p.stem, re.I)),
+                   and not re.search(r";[^;]*article\d+$", p.stem, re.I)),
                   key=lambda p: str(p).casefold())
 
 def find_saved_publications(output_root: Path, videos: List[Path]) -> dict:
@@ -599,11 +617,23 @@ def published_article_link(result: dict, site_host: str) -> str:
     host = urlsplit("https://" + re.sub(r"^https?://", "", str(site_host).strip().strip("/"))).netloc
     return f"https://{host}/article/{article_id}" if host and article_id else ""
 
-def safe_video_filename(post_text: str, article_url: str, suffix: str, max_length: int = 219) -> str:
-    """Limit the entire filename, including extension, to 219 characters."""
+def choose_filename_phrase(cfg: dict) -> str:
+    """Chọn ngẫu nhiên 1 câu trong ô 'Câu chèn trong tên file'. Trống = 'full story'."""
+    import random
+    raw = str(cfg.get("filename_phrase_list") or "").replace("\r", "\n")
+    lines = [re.sub(r"\s+", " ", ln).strip(" .;") for ln in raw.split("\n")]
+    lines = [ln for ln in lines if ln]
+    return random.choice(lines) if lines else "full story"
+
+def safe_video_filename(post_text: str, article_url: str, suffix: str, max_length: int = 219,
+                        phrase: str = "full story") -> str:
+    """Limit the entire filename, including extension, to 219 characters.
+    'phrase' là câu ngẫu nhiên chèn giữa caption và link bài viết."""
     import unicodedata
     safe_url = article_url.replace(":", "").replace("/", "")
-    ending = f";full story {safe_url}"
+    clean_phrase = re.sub(r'[<>:"/\\|?*\x00-\x1f;]', " ", str(phrase or ""))
+    clean_phrase = re.sub(r"\s+", " ", clean_phrase).strip(" .;")
+    ending = f";{clean_phrase} {safe_url}" if clean_phrase else f";{safe_url}"
     # Some WebDAV/SMB servers limit UTF-8 bytes, even when Windows reports
     # a character count below 219. Keep the filename ASCII and URL intact.
     post_text = post_text.replace("’", "'").replace("‘", "'").replace("—", "-").replace("–", "-")
@@ -615,7 +645,7 @@ def safe_video_filename(post_text: str, article_url: str, suffix: str, max_lengt
         raise ValueError("Link bài viết quá dài để đặt tên video trong 219 ký tự.")
     if len(title) > remaining:
         # Shorten the hook first, then drop optional tags. Never break the
-        # agreed hook + at least 3 hashtags + ;full story + ID format.
+        # agreed hook + at least 3 hashtags + ;<phrase> + ID format.
         match = re.search(r"((?:\s+#[A-Za-z0-9_]+){3,5})$", title)
         if match:
             tags = match.group(1).split()
@@ -3188,8 +3218,10 @@ Return STRICT JSON only:
             title = re.sub(r"[;#\r\n]+", " ", str(story.get("title") or video.stem)).strip()[:160]
             tags = ["#story", "#drama", "#fullstory"]
         post_text = f"{title} {' '.join(tags)}"
-        exact_text = f"{post_text};full story {link}"
-        filename = safe_video_filename(post_text, link, video.suffix)
+        phrase = choose_filename_phrase(self.cfg)
+        exact_text = f"{post_text};{phrase} {link}"
+        filename = safe_video_filename(post_text, link, video.suffix, phrase=phrase)
+        self._log(f"Câu chèn tên file: {phrase}")
         self._log(f"Tên file mới: {len(filename)}/219 ký tự | {filename}")
         # On Windows, a mapped drive can reject a full path above MAX_PATH
         # even when its basename is below the requested 219 characters.
@@ -3204,7 +3236,7 @@ Return STRICT JSON only:
             errors.append(f"Thư mục quá dài để chứa hook, hashtag và link ID: {video.parent}")
         for limit in attempts:
             try:
-                filename = safe_video_filename(post_text, link, video.suffix, max_length=limit)
+                filename = safe_video_filename(post_text, link, video.suffix, max_length=limit, phrase=phrase)
             except ValueError as exc:
                 errors.append(str(exc))
                 continue
@@ -3951,8 +3983,8 @@ class App(tk.Tk):
 
         self.vars = {}
         for k, v in self.cfg.items():
-            if k == "story_prompt_text":
-                continue  # Edited in the multiline prompt box instead.
+            if k in ("story_prompt_text", "filename_phrase_list"):
+                continue  # Edited in the multiline boxes instead.
             if isinstance(v, bool):
                 self.vars[k] = tk.BooleanVar(value=v)
             else:
@@ -4066,6 +4098,12 @@ class App(tk.Tk):
 
         ttk.Label(source, text="Chọn folder cha: tự quét mọi folder con; mỗi video đăng một bài rồi đổi tên theo ID. Folder bắt buộc Auto publish.",
                   foreground="#555").grid(row=4, column=0, columnspan=5, sticky="w", pady=(2, 0))
+
+        ttk.Label(source, text="Câu chèn trong tên file (mỗi dòng 1 câu, tool chọn ngẫu nhiên 1 câu; trống = \"full story\")",
+                  foreground="#555").grid(row=5, column=0, columnspan=5, sticky="w", pady=(6, 2))
+        self.filename_phrase_editor = scrolledtext.ScrolledText(source, wrap="word", height=4)
+        self.filename_phrase_editor.grid(row=6, column=0, columnspan=5, sticky="ew", pady=(0, 4))
+        self.filename_phrase_editor.insert("1.0", self.cfg.get("filename_phrase_list", DEFAULT_FILENAME_PHRASES))
 
         # ---------------- TABS ----------------
         nb = ttk.Notebook(top, height=190)
@@ -4514,6 +4552,7 @@ class App(tk.Tk):
         for k, var in self.vars.items():
             cfg[k] = var.get()
         cfg["story_prompt_text"] = self.prompt_editor.get("1.0", "end-1c").strip()
+        cfg["filename_phrase_list"] = self.filename_phrase_editor.get("1.0", "end-1c").strip()
 
         detected_ffmpeg = auto_detect_ffmpeg_bin(str(cfg.get("ffmpeg_bin", "") or ""))
         if detected_ffmpeg:
