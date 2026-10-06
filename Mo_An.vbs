@@ -17,4 +17,4 @@ If Not fso.FileExists(bat) Then
 End If
 
 ' 0 = cua so an, False = khong cho doi -> tool tat thi cmd tat theo
-sh.Run """ & bat & """ hidden", 0, False
+sh.Run """" & bat & """", 0, False
