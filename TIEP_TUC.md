@@ -3,7 +3,7 @@
 > Đọc file này trước khi sửa tool. Cập nhật lại mỗi khi rời tool.
 
 ## Trạng thái hiện tại (2026-10-06)
-- **Version đang chạy:** v23.6.7
+- **Version đang chạy:** v23.6.8
 - **Repo GitHub:** https://github.com/NaupUuh/Phong_DHue
 - **Thư mục máy:** `Phong_DHue`
 - **Cách chạy:** bấm đúp `CHAY_Phong_DHue.bat` (hoặc `viet_drama_V23.6_dashboard_thumbnail.py`)
@@ -107,6 +107,15 @@ python release.py 23.7.0 "Mô tả"
 # đồng bộ lên ổ Z
 python sync_z.py
 ```
+
+### Fix 2026-10-06 (v23.6.8) — CRASH SO BAN TU MODEL ('could not convert string to float')
+- **Trieu chung user gap:** dialog loi `could not convert string to float: '11.11'` tai `analyze_with_vision`.
+- **ROOT CAUSE:** `float('11.11')` khong the loi -> chuoi that chua **dau cham FULLWIDTH U+FF0E**, nhin y het dau cham thuong. Model Vilao thinh thoang tra so kem ky tu Unicode.
+- **FIX:** them `safe_float()` / `safe_int()` o module level: chuan hoa **NFKC** (fullwidth -> ASCII) + bo NBSP/zero-width + doi minus U+2212 + regex `_NUM_RE` cuu ca chuoi lan van ban ('11.11s - 15.20s'). Ap cho **MOI** field so tu model: `time_start/time_end` (batch Vision), `events` dang dict (chuan hoa tai cho), sort event, `_chapter_source_payload` (number/start/end), `nums`, `transcript_slice_for_time`, prompt f-string, `_write_one_chapter` setdefault, heading HTML dang web.
+- **Bang chung:** chay lai DUNG code path cu -> ban CU crash y nguyen thong bao user gap, ban MOI chay sach (`start=11.11 end=15.20` deu la float). Test 16 dang so ban (fullwidth, '11.11s', '11,11', '~11.11', range, zero-width, None, dict, list) deu PASS.
+- **File:** them ~18 cho `safe_float` + 7 cho `safe_int` moi file. CRLF giu nguyen (LF tran=0), compile OK.
+- **Khong doi:** GUI, config, logic nghiep vu. E2E van PASS (12/12 khung co mat, thumb 290x290, cover 760x400).
+- **Bai hoc chi tiet:** skill `grok-batch-video-tools` -> `references/dirty-numeric-parse.md`
 
 ### Fix 2026-10-06 (v23.6.7) — ANH BIA: THAY DETECTOR MAT (OpenCV 5.x) + UU TIEN CAM XUC
 - **Yeu cau:** anh bia phai la anh CO NGUOI/nhan vat, NET nhat co the, cam xuc/drama cang cao cang tot.
