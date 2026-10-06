@@ -227,7 +227,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.5"
+APP_VERSION = "23.6.6"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -365,6 +365,13 @@ DEFAULT_CONFIG = {
     "site_id": "120",
     "category_id": "1747",
     "site_host": "drama.viralstory.biz",
+    "net_provider": "SmartTraffic",
+    "adsconex_api_key": "",
+    "adsconex_base_url": "https://usjusticereport.cfx.bz/api",
+    "adsconex_site_host": "usjusticereport.cfx.bz",
+    "adsconex_category": "15",
+    "adsconex_author": "",
+    "adsconex_apply_image_to_all": True,
     "language": "English",
     "whisper_model": "small",
     "whisper_device": "cpu",
@@ -440,6 +447,10 @@ HƯỚNG DẪN VIDEO STORY PUBLISHER
     "...;PART 2 & FULL ENDING https...article123.mp4"). De trong = "full story".
     Luu y: ten file Windows khong cho phep cac ky tu dac biet (? * : / gach
     cheo nguoc < > |) nen tool tu thay bang dau cach.
+10. O "Net dang bai" o vung Dau vao: chon SmartTraffic (mac dinh) hoac
+    Adsconex. Chon Adsconex thi bai dang sang site Blogbio, moi chapter la
+    mot bai rieng va link dang /blog/<slug>; token + category nhap trong tab
+    Adsconex. Doi net KHONG lam mat API key cua net kia.
 """
 
 
@@ -494,7 +505,9 @@ def find_unpublished_videos(folder: Path) -> List[Path]:
                    and not re.search(r";[^;]*article\d+$", p.stem, re.I)),
                   key=lambda p: str(p).casefold())
 
-def find_saved_publications(output_root: Path, videos: List[Path]) -> dict:
+def find_saved_publications(output_root: Path, videos: List[Path], net_provider: str = "SmartTraffic",
+                            site_host: str = "drama.viralstory.biz",
+                            adsconex_site_host: str = "usjusticereport.cfx.bz") -> dict:
     """Find existing article IDs for source videos before any new publish POST."""
     from collections import Counter
     name_counts = Counter(v.name.casefold() for v in videos)
@@ -506,7 +519,10 @@ def find_saved_publications(output_root: Path, videos: List[Path]) -> dict:
             continue
         try:
             result = json.loads(result_path.read_text(encoding="utf-8"))
-            if not published_article_link(result, "drama.viralstory.biz"):
+            use_ads = str(net_provider or "").strip().lower().startswith("ads")
+            existing_link = (published_adsconex_link(result, adsconex_site_host) if use_ads
+                             else published_article_link(result, site_host))
+            if not existing_link:
                 continue
             source_path = work_dir / "source_video.json"
             if source_path.is_file():
@@ -616,6 +632,64 @@ def published_article_link(result: dict, site_host: str) -> str:
                 break
     host = urlsplit("https://" + re.sub(r"^https?://", "", str(site_host).strip().strip("/"))).netloc
     return f"https://{host}/article/{article_id}" if host and article_id else ""
+
+def published_adsconex_link(result: dict, site_host: str) -> str:
+    """Link bai Adsconex/Blogbio dang /blog/<slug>. Lay tu response, khong doan."""
+    if not isinstance(result, dict):
+        return ""
+    host = urlsplit("https://" + re.sub(r"^https?://", "", str(site_host).strip().strip("/"))).netloc
+    if not host:
+        return ""
+    candidates = [result]
+    for obj in list(candidates):
+        for key in ("data", "post", "result", "series", "posts", "chapters"):
+            nested = obj.get(key) if isinstance(obj, dict) else None
+            if isinstance(nested, dict) and nested not in candidates:
+                candidates.append(nested)
+            elif isinstance(nested, list):
+                for item in nested:
+                    if isinstance(item, dict) and item not in candidates:
+                        candidates.append(item)
+    for obj in candidates:
+        url = str(obj.get("link") or obj.get("url") or obj.get("permalink") or "").strip()
+        if url.startswith("http"):
+            return url
+        if url.startswith("/"):
+            return f"https://{host}{url}"
+    for obj in candidates:
+        slug = str(obj.get("slug") or "").strip()
+        if slug:
+            return f"https://{host}/blog/{slug}"
+    return ""
+
+def build_adsconex_chapter_content(story: dict) -> str:
+    """Dung content cho POST /api/posts mode=chapter.
+
+    Moi chapter la 1 dong 'CHAPTER N - Title'; phan truoc marker dau tien
+    tro thanh mo ta series. Khong dung {{nextpage}} nhu SmartTraffic.
+    """
+    chapters = story.get("chapters", []) or []
+    intro = compact_meta_text(story.get("meta_description") or story.get("summary") or "", 600)
+    parts = []
+    if intro:
+        parts.append(f"<p>{html_escape(intro)}</p>")
+    for idx, ch in enumerate(chapters):
+        n = ch.get("number", idx + 1)
+        raw_title = str(ch.get("title") or "").strip()
+        raw_title = re.sub(rf"^chapter\s*{n}\s*[-:–—]*\s*", "", raw_title, flags=re.I).strip()
+        if not raw_title:
+            raw_title = "The Story Takes a Dangerous Turn"
+        parts.append(f"<p>CHAPTER {n} - {html_escape(raw_title)}</p>")
+        parts.append(paragraphize(chapter_body_only(ch.get("body", ""), n)))
+    return "\n".join(parts)
+
+def active_publish_link(result: dict, cfg: dict) -> str:
+    """Link bai theo net dang chon: Adsconex (/blog/<slug>) hoac SmartTraffic (/article/<id>)."""
+    cfg = cfg or {}
+    provider = str(cfg.get("net_provider") or "SmartTraffic").strip().lower()
+    if provider.startswith("ads"):
+        return published_adsconex_link(result, cfg.get("adsconex_site_host", ""))
+    return published_article_link(result, cfg.get("site_host", ""))
 
 def choose_filename_phrase(cfg: dict) -> str:
     """Chọn ngẫu nhiên 1 câu trong ô 'Câu chèn trong tên file'. Trống = 'full story'."""
@@ -2969,6 +3043,161 @@ Return STRICT JSON only:
         except requests.RequestException as exc:
             self._log(f"Không kiểm tra được Site ID qua API: {exc}")
 
+    # ============================================================
+    # ADSCONEX / BLOGBIO — POST /api/posts mode=chapter
+    # ============================================================
+    def _adsconex_headers(self, token: str) -> dict:
+        """Header Chrome de qua Cloudflare (thieu sec-ch-ua/Sec-Fetch bi chan 1010)."""
+        base = str(self.cfg.get("adsconex_base_url") or "https://usjusticereport.cfx.bz/api").strip().rstrip("/")
+        host = urlsplit(base).netloc or "usjusticereport.cfx.bz"
+        return {
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"),
+            "Referer": f"https://{host}/admin/api-docs",
+            "Origin": f"https://{host}",
+            "sec-ch-ua": '"Chromium";v="141", "Not?A_Brand";v="24", "Google Chrome";v="141"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+        }
+
+    def publish_adsconex(self, story: dict) -> dict:
+        """Dang bai len Adsconex (nen Blogbio) o che do chapter.
+
+        Server tu tach chuong theo marker 'CHAPTER N - Title' va tu tao series.
+        """
+        self._step_start("Adsconex publish")
+        token = str(self.cfg.get("adsconex_api_key", "") or "").strip()
+        if not token:
+            raise RuntimeError("Adsconex API token đang trống. Nhập trong tab Adsconex.")
+
+        base = str(self.cfg.get("adsconex_base_url") or "https://usjusticereport.cfx.bz/api").strip().rstrip("/")
+        endpoint = f"{base}/posts"
+        headers = self._adsconex_headers(token)
+
+        chapters = story.get("chapters", []) or []
+        if not chapters:
+            raise RuntimeError("Truyện chưa có chapter nào để đăng dạng series.")
+
+        content = build_adsconex_chapter_content(story)
+        missing = [n for n in range(1, len(chapters) + 1)
+                   if f"CHAPTER {n} - " not in content]
+        if missing:
+            raise RuntimeError(
+                f"Content thiếu marker chapter {missing}; đã dừng đăng để tránh bài lỗi."
+            )
+
+        thumb = (story.get("thumbnail_url") or "").strip()
+        payload = {
+            "title": compact_meta_text(story.get("title") or "Untitled Story", 240),
+            "content": content,
+            "permalink": safe_slug(story.get("slug") or story.get("title") or "story"),
+            "mode": "chapter",
+            "skip_intro": True,
+        }
+        if thumb.startswith("https://"):
+            payload["feature_image"] = thumb
+            if bool(self.cfg.get("adsconex_apply_image_to_all", True)):
+                payload["apply_image_to_all"] = True
+        author = str(self.cfg.get("adsconex_author", "") or "").strip()
+        if author:
+            payload["author"] = author
+        raw_category = str(self.cfg.get("adsconex_category", "") or "").strip()
+        if raw_category.isdigit():
+            payload["category"] = int(raw_category)
+        seo_title = compact_meta_text(story.get("meta_title") or story.get("title") or "", 240)
+        seo_desc = compact_meta_text(story.get("meta_description") or "", 500)
+        keywords = compact_meta_text(story.get("keywords") or "", 500)
+        if seo_title:
+            payload["seo_title"] = seo_title
+        if seo_desc:
+            payload["seo_description"] = seo_desc
+        if keywords:
+            payload["seokeyword"] = keywords
+
+        if self.work_dir:
+            try:
+                _safe_write_text(self.work_dir / "publish_payload_adsconex.json",
+                                 json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+
+        self._log(
+            f"Adsconex POST {endpoint} | chapters={len(chapters)} | "
+            f"thumbnail={'YES' if 'feature_image' in payload else 'NO'} | "
+            f"category={payload.get('category', 'none')}"
+        )
+        try:
+            r = requests.post(endpoint, headers=headers, json=payload, timeout=180)
+        except Exception as e:
+            raise RuntimeError(f"Adsconex network error: {e}")
+
+        try:
+            data = r.json()
+        except Exception:
+            data = {"raw": r.text[:2000]}
+
+        if self.work_dir:
+            try:
+                _safe_write_text(self.work_dir / "publish_response_adsconex.json",
+                                 json.dumps({"http_status": r.status_code, "response": data},
+                                            ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+
+        if r.status_code not in (200, 201):
+            detail = json.dumps(data, ensure_ascii=False)[:800] if isinstance(data, (dict, list)) else str(data)[:800]
+            raise RuntimeError(f"Adsconex HTTP {r.status_code}: {detail}")
+
+        posts = data.get("posts") if isinstance(data, dict) else None
+        if not isinstance(posts, list) or not posts:
+            raise RuntimeError(
+                "Adsconex không trả danh sách chapter. Response: "
+                + (json.dumps(data, ensure_ascii=False)[:800] if isinstance(data, (dict, list)) else str(data)[:800])
+            )
+        site_host = self.cfg.get("adsconex_site_host", "")
+        link = published_adsconex_link({"posts": posts}, site_host)
+        if not link:
+            first = posts[0] if isinstance(posts[0], dict) else {}
+            link = str(first.get("link") or first.get("url") or "").strip()
+
+        # Adsconex tao MOT BAI RIENG cho moi chapter (khong dung ?c=N nhu
+        # SmartTraffic), nen liet ke link tung bai theo dung thu tu server tra.
+        chapter_links = []
+        for idx, post in enumerate(posts, 1):
+            if not isinstance(post, dict):
+                continue
+            one = published_adsconex_link({"posts": [post]}, site_host)
+            if one:
+                chapter_links.append(f"Chapter {idx}: {one}")
+        chapter_links_text_value = "\n".join(chapter_links) + ("\n" if chapter_links else "")
+
+        self._log(f"Adsconex accepted | HTTP {r.status_code} | chapters={len(posts)} | url={link}")
+        self._step_end("Adsconex publish")
+        return {
+            "url": link,
+            "id": (posts[0] or {}).get("postId") if isinstance(posts[0], dict) else None,
+            "chapters": posts,
+            "chapter_links": chapter_links,
+            "chapter_links_text": chapter_links_text_value,
+            "count": len(posts),
+            "provider": "Adsconex",
+            "response": data,
+        }
+
+    def publish_current(self, story: dict) -> dict:
+        """Chon net theo cai dat trong GUI: SmartTraffic hoac Adsconex."""
+        provider = str(self.cfg.get("net_provider") or "SmartTraffic").strip().lower()
+        if provider.startswith("ads"):
+            return self.publish_adsconex(story)
+        return self.publish_smarttraffic(story)
+
     def publish_smarttraffic(self, story: dict) -> dict:
         """Publish without ever silently dropping the thumbnail."""
         self._step_start("SmartTraffic publish")
@@ -3185,7 +3414,11 @@ Return STRICT JSON only:
 
     def rename_published_video(self, video: Path, story: dict, result: dict, script: str = "") -> str:
         """Rename the original video only when this publish has a real numeric article ID."""
-        link = published_article_link(result, self.cfg.get("site_host", ""))
+        provider = str(self.cfg.get("net_provider") or "SmartTraffic").strip().lower()
+        if provider.startswith("ads"):
+            link = published_adsconex_link(result, self.cfg.get("adsconex_site_host", ""))
+        else:
+            link = published_article_link(result, self.cfg.get("site_host", ""))
         if not link:
             self._log("Chưa nhận được ID bài viết từ API; giữ tên video, không đoán link từ slug.")
             return ""
@@ -3476,13 +3709,14 @@ Return STRICT JSON only:
                 )
                 publish_result = prior
             else:
-                publish_result = self.publish_smarttraffic(story)
+                publish_result = self.publish_current(story)
             _safe_write_text(self.work_dir / "publish_result.json",
                              json.dumps(publish_result, ensure_ascii=False, indent=2), encoding="utf-8")
             try:
                 _safe_write_text(
                     self.work_dir / "chapter_links.txt",
-                    chapter_links_text(publish_result.get("url", ""), len(story.get("chapters", []))),
+                    str(publish_result.get("chapter_links_text") or "")
+                    or chapter_links_text(publish_result.get("url", ""), len(story.get("chapters", []))),
                     encoding="utf-8"
                 )
             except Exception:
@@ -4091,6 +4325,11 @@ class App(tk.Tk):
         ttk.Combobox(source, textvariable=self.batch_workers, values=("1", "2", "3", "4"),
                      state="readonly", width=7).grid(row=1, column=1, sticky="w", padx=(6, 8), pady=4)
 
+        ttk.Label(source, text="Net đăng bài").grid(row=1, column=2, sticky="e", padx=(12, 6), pady=4)
+        ttk.Combobox(source, textvariable=self.vars["net_provider"],
+                     values=("SmartTraffic", "Adsconex"), state="readonly", width=16).grid(
+                         row=1, column=3, sticky="w", pady=4)
+
         ttk.Label(
             source,
             text="Chỉ video: Whisper/Vision đọc nội dung. Có kịch bản: Writer dùng kịch bản; video (nếu có) dùng lấy ảnh.",
@@ -4109,6 +4348,7 @@ class App(tk.Tk):
 
         ai = ttk.Frame(nb, padding=5)
         st = ttk.Frame(nb, padding=10)
+        ads = ttk.Frame(nb, padding=10)
         img = ttk.Frame(nb, padding=10)
         settings_tab = ttk.Frame(nb, padding=10)
         guide_tab = ttk.Frame(nb, padding=10)
@@ -4117,6 +4357,7 @@ class App(tk.Tk):
         nb.add(prompt_tab, text="Kịch bản & Prompt")
         nb.add(ai, text="Vilao AI")
         nb.add(st, text="SmartTraffic")
+        nb.add(ads, text="Adsconex")
         nb.add(img, text="Image hosting")
         nb.add(settings_tab, text="FFmpeg")
         nb.add(guide_tab, text="Hướng dẫn")
@@ -4157,7 +4398,8 @@ class App(tk.Tk):
         # Keep taller settings tabs readable, while the editor tab brings actions up.
         nb.bind("<<NotebookTabChanged>>", lambda event: nb.configure(
             height=190 if nb.select() == str(prompt_tab) else
-            190 if nb.select() == str(ai) else 290))
+            190 if nb.select() == str(ai) else
+            320 if nb.select() == str(ads) else 290))
 
         # ============================================================
         # VILAO AI - only settings the user still needs to touch
@@ -4264,6 +4506,72 @@ class App(tk.Tk):
             text="Mở SmartTraffic API Keys",
             command=lambda: webbrowser.open("https://dashboard.smarttraffic.app/admin/api-keys")
         ).pack(side="left")
+
+        # ============================================================
+        # ADSCONEX (nền Blogbio) - token + site/author/category riêng
+        # ============================================================
+        ads.columnconfigure(1, weight=1)
+
+        ttk.Label(ads, text="Adsconex API Token", width=22).grid(row=0, column=0, sticky="w", pady=4)
+        self.adsconex_key_entry = ttk.Entry(
+            ads, textvariable=self.vars["adsconex_api_key"], show="*"
+        )
+        self.adsconex_key_entry.grid(row=0, column=1, sticky="ew", pady=4)
+        self.adsconex_key_editing = False
+        self.adsconex_edit_btn = ttk.Button(
+            ads, text="Edit Key", command=self.toggle_adsconex_key_edit
+        )
+        self.adsconex_edit_btn.grid(row=0, column=2, padx=(8, 0), pady=4)
+
+        self._row(ads, 1, "API base URL", "adsconex_base_url")
+        self._row(ads, 2, "Site host", "adsconex_site_host")
+        self._row(ads, 3, "Author (đuôi slug)", "adsconex_author")
+        ads_cat = ttk.Frame(ads)
+        ads_cat.grid(row=4, column=0, columnspan=3, sticky="w", pady=4)
+        ttk.Label(ads_cat, text="Category ID (số)", width=22).pack(side="left")
+        ttk.Entry(ads_cat, textvariable=self.vars["adsconex_category"], width=12).pack(side="left")
+        ttk.Button(ads_cat, text="Lấy danh sách", command=self.fetch_adsconex_categories).pack(
+            side="left", padx=(8, 0))
+        ttk.Checkbutton(
+            ads,
+            text="Gắn ảnh bìa cho mọi chapter (apply_image_to_all)",
+            variable=self.vars["adsconex_apply_image_to_all"]
+        ).grid(row=5, column=1, sticky="w", pady=6)
+
+        ttk.Label(
+            ads,
+            text=(
+                "Đăng ở mode=chapter: server tự tách chương theo marker "
+                "'CHAPTER N - Tên chương' và tự tạo series. Phần trước marker đầu là mô tả series."
+                " Link bài dạng /blog/<slug>.\n"
+                "Category ID: bấm 'Lấy danh sách' (dùng token ở trên) — thường Story = 15.\n"
+                "Author: chỉ là chuỗi ghép vào đuôi slug (vd 'aqtn2' → ...-aqtn2). Để trống thì server tự thêm."
+            ),
+            foreground="#555",
+            wraplength=950,
+            justify="left"
+        ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 4))
+
+        ads_buttons = ttk.Frame(ads)
+        ads_buttons.grid(row=7, column=0, columnspan=3, sticky="w", pady=4)
+        ttk.Button(
+            ads_buttons,
+            text="Mở trang API docs",
+            command=lambda: webbrowser.open(
+                str(self.vars["adsconex_site_host"].get() or "usjusticereport.cfx.bz").rstrip("/")
+                + "/admin/api-docs")
+        ).pack(side="left")
+        ttk.Button(
+            ads_buttons,
+            text="Kiểm tra token",
+            command=self.test_adsconex_token
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            ads_buttons,
+            text="Lấy link site",
+            command=lambda: webbrowser.open(
+                "https://" + str(self.vars["adsconex_site_host"].get() or "usjusticereport.cfx.bz").strip().strip("/"))
+        ).pack(side="left", padx=6)
 
         # ============================================================
         # IMAGE HOSTING - only credentials are editable
@@ -4738,6 +5046,164 @@ class App(tk.Tk):
     def progress(self, v, s=""):
         self.q.put(("progress", float(v), s))
 
+    def toggle_adsconex_key_edit(self):
+        """Reveal/mask the Adsconex token while keeping the field editable."""
+        self.adsconex_key_editing = not self.adsconex_key_editing
+        if self.adsconex_key_editing:
+            self.adsconex_key_entry.configure(show="")
+            self.adsconex_edit_btn.configure(text="Hide Key")
+            self.adsconex_key_entry.focus_set()
+            self.adsconex_key_entry.icursor("end")
+        else:
+            self.adsconex_key_entry.configure(show="*")
+            self.adsconex_edit_btn.configure(text="Edit Key")
+
+    def test_adsconex_token(self):
+        """Goi GET /series de kiem tra token + ket noi (chay nen, khong treo GUI)."""
+        token = str(self.vars["adsconex_api_key"].get() or "").strip()
+        if not token:
+            messagebox.showwarning(APP_NAME, "Chưa nhập Adsconex API Token.")
+            return
+        base = str(self.vars["adsconex_base_url"].get() or "https://usjusticereport.cfx.bz/api").strip().rstrip("/")
+        site = str(self.vars["adsconex_site_host"].get() or "usjusticereport.cfx.bz").strip().strip("/")
+        host = urlsplit(base).netloc or site
+        headers = {
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"),
+            "Referer": f"https://{host}/admin/api-docs",
+            "Origin": f"https://{host}",
+            "sec-ch-ua": '"Chromium";v="141", "Not?A_Brand";v="24", "Google Chrome";v="141"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+        }
+
+        def _worker():
+            try:
+                r = requests.get(f"{base}/series", headers=headers, timeout=45)
+                if r.status_code == 200:
+                    try:
+                        data = r.json()
+                    except Exception:
+                        data = {}
+                    series = data.get("series") if isinstance(data, dict) else None
+                    count = len(series) if isinstance(series, list) else "?"
+                    self.log(f"Adsconex token OK — HTTP 200 | series hiện có: {count}\n")
+                    self.q.put(("adsconex_test", f"Adsconex OK — token hợp lệ.\n\nSeries hiện có trên site: {count}"))
+                else:
+                    snippet = (r.text or "")[:300]
+                    self.log(f"Adsconex token FAIL — HTTP {r.status_code}: {snippet}\n")
+                    self.q.put(("adsconex_test", f"Adsconex HTTP {r.status_code}\n\n{snippet}"))
+            except Exception as e:
+                self.log(f"Adsconex token FAIL — {e}\n")
+                self.q.put(("adsconex_test", f"Không gọi được Adsconex:\n{e}"))
+
+        self.log(f"Đang kiểm tra Adsconex token ({host})...\n")
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def fetch_adsconex_categories(self):
+        """Lay danh sach category tu Adsconex roi cho chon (chay nen)."""
+        token = str(self.vars["adsconex_api_key"].get() or "").strip()
+        if not token:
+            messagebox.showwarning(APP_NAME, "Chưa nhập Adsconex API Token.")
+            return
+        base = str(self.vars["adsconex_base_url"].get() or "https://usjusticereport.cfx.bz/api").strip().rstrip("/")
+        host = urlsplit(base).netloc or str(self.vars["adsconex_site_host"].get() or "").strip().strip("/")
+        headers = {
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"),
+            "Referer": f"https://{host}/admin/api-docs",
+            "Origin": f"https://{host}",
+            "sec-ch-ua": '"Chromium";v="141", "Not?A_Brand";v="24", "Google Chrome";v="141"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+        }
+
+        def _worker():
+            try:
+                r = requests.get(f"{base}/categories", headers=headers, timeout=45)
+                if r.status_code != 200:
+                    self.log(f"Adsconex categories FAIL — HTTP {r.status_code}\n")
+                    self.q.put(("adsconex_categories", ("error", f"HTTP {r.status_code}\n\n{(r.text or '')[:300]}")))
+                    return
+                data = r.json()
+                items = None
+                if isinstance(data, list):
+                    items = data
+                elif isinstance(data, dict):
+                    for key in ("categories", "data", "items", "results"):
+                        v = data.get(key)
+                        if isinstance(v, list):
+                            items = v
+                            break
+                        if isinstance(v, dict) and isinstance(v.get("data"), list):
+                            items = v["data"]
+                            break
+                if not isinstance(items, list) or not items:
+                    self.q.put(("adsconex_categories", ("error", "Không thấy category nào trong response.")))
+                    return
+                rows = []
+                for c in items:
+                    if not isinstance(c, dict):
+                        continue
+                    rows.append((
+                        str(c.get("id", "")),
+                        str(c.get("title") or c.get("name") or c.get("slug") or ""),
+                        str(c.get("slug") or ""),
+                    ))
+                self.log(f"Adsconex categories OK — {len(rows)} category\n")
+                self.q.put(("adsconex_categories", ("ok", rows)))
+            except Exception as e:
+                self.log(f"Adsconex categories FAIL — {e}\n")
+                self.q.put(("adsconex_categories", ("error", str(e))))
+
+        self.log(f"Đang lấy danh sách category ({host})...\n")
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def show_adsconex_categories(self, payload):
+        """Popup chon category; bam 1 dong la dien ID vao o."""
+        kind, data = payload
+        if kind == "error":
+            messagebox.showerror("Adsconex categories", data)
+            return
+        win = tk.Toplevel(self)
+        win.title("Chọn category — Adsconex")
+        win.transient(self)
+        win.grab_set()
+        ttk.Label(
+            win, text="Bấm 1 dòng để điền Category ID (bấm đúp cũng được):"
+        ).pack(anchor="w", padx=10, pady=(10, 4))
+        box = tk.Listbox(win, width=64, height=min(18, max(4, len(data))))
+        box.pack(fill="both", expand=True, padx=10, pady=4)
+        for cid, name, slug in data:
+            box.insert("end", f"{cid:>5}  |  {name}  ({slug})")
+
+        def _apply(_evt=None):
+            sel = box.curselection()
+            if not sel:
+                return
+            cid = data[sel[0]][0]
+            self.vars["adsconex_category"].set(cid)
+            self.log(f"Đã chọn Adsconex category ID = {cid}\n")
+            win.destroy()
+
+        box.bind("<Double-Button-1>", _apply)
+        btns = ttk.Frame(win)
+        btns.pack(fill="x", padx=10, pady=(4, 10))
+        ttk.Button(btns, text="Chọn", command=_apply).pack(side="right")
+        ttk.Button(btns, text="Đóng", command=win.destroy).pack(side="right", padx=(0, 6))
+
     def _poll_queue(self):
         try:
             while True:
@@ -4782,6 +5248,13 @@ class App(tk.Tk):
                         self._finish_tracking()
                     self.run_btn.config(state="normal")
                     messagebox.showerror(APP_NAME, item[1])
+                elif item[0] == "adsconex_test":
+                    if "OK" in item[1]:
+                        messagebox.showinfo("Adsconex token", item[1])
+                    else:
+                        messagebox.showerror("Adsconex token", item[1])
+                elif item[0] == "adsconex_categories":
+                    self.show_adsconex_categories(item[1])
                 elif item[0] == "model_test":
                     messagebox.showinfo("Vilao model access", item[1])
                 elif item[0] == "published":
@@ -4861,7 +5334,11 @@ class App(tk.Tk):
                     if requested_workers > worker_count:
                         self.log("Đã giới hạn 2 video đồng thời vì mỗi video còn có nhiều tác vụ Vision/Writer song song.")
                     self.log(f"Thông tin máy: {diag_path}")
-                    existing = find_saved_publications(output_root, sources)
+                    existing = find_saved_publications(
+                        output_root, sources,
+                        cfg.get("net_provider", "SmartTraffic"),
+                        cfg.get("site_host", ""),
+                        cfg.get("adsconex_site_host", ""))
                     # Do the API model probe once, before starting any per-video
                     # worker. Repeating it concurrently opens several SSL
                     # connections and may crash native libraries on some PCs.
@@ -4890,7 +5367,7 @@ class App(tk.Tk):
                                 work_dir, previous = saved[0]
                                 if len(saved) > 1:
                                     batch_log(f"Có {len(saved)} bài đã đăng cho video; dùng bài mới nhất "
-                                              f"{published_article_link(previous, cfg.get('site_host',''))} "
+                                              f"{active_publish_link(previous, cfg)} "
                                               f"tại {work_dir}. Không đăng lại.")
                                 story_path = work_dir / "story.json"
                                 if not story_path.is_file():
@@ -4899,7 +5376,7 @@ class App(tk.Tk):
                                 script_path = work_dir / "video_script.txt"
                                 script_text = script_path.read_text(encoding="utf-8") if script_path.is_file() else ""
                                 pipeline.work_dir = work_dir
-                                batch_log(f"Bài đã đăng trước đó: {published_article_link(previous, cfg.get('site_host',''))}. Chỉ đổi tên video.")
+                                batch_log(f"Bài đã đăng trước đó: {active_publish_link(previous, cfg)}. Chỉ đổi tên video.")
                                 renamed = pipeline.rename_published_video(video, story, previous, script_text)
                                 result = {"work_dir": str(work_dir), "story": story,
                                           "publish_result": previous, "renamed_video": renamed}
@@ -4912,12 +5389,12 @@ class App(tk.Tk):
                                 rename_log = Path(result["work_dir"]) / "rename_error.txt"
                                 reason = rename_log.read_text(encoding="utf-8") if rename_log.is_file() else "Không có chi tiết lỗi đổi tên."
                                 raise RuntimeError(
-                                    f"Bài đã đăng (ID {published_article_link(published, cfg.get('site_host', ''))}), "
+                                    f"Bài đã đăng (ID {active_publish_link(published, cfg)}), "
                                     f"nhưng không đổi được tên video. Thư mục kết quả: {result['work_dir']}. "
                                     f"Nguyên nhân: {reason.strip()}. Không chạy lại để tránh đăng trùng."
                                 )
                             return {"video": label, "status": "success", "renamed_video": result["renamed_video"],
-                                    "article_url": published_article_link(published, cfg.get("site_host", "")),
+                                    "article_url": active_publish_link(published, cfg),
                                     "net_title": compact_meta_text(result["story"].get("title") or "", 240),
                                     "output": result["work_dir"]}
                         except Exception as exc:
@@ -5017,7 +5494,8 @@ class App(tk.Tk):
         if not url:
             return
 
-        links_text = chapter_links_text(url, chapter_count)
+        links_text = str((publish_result or {}).get("chapter_links_text") or "") \
+            or chapter_links_text(url, chapter_count)
 
         win = tk.Toplevel(self)
         win.title("Published Article Links")
@@ -5146,7 +5624,7 @@ class App(tk.Tk):
                 pipe = StoryPipeline(cfg, self.log, self.progress)
                 pipe.script_only = script_only
                 pipe.work_dir = Path(self.last_result["work_dir"])
-                r = pipe.publish_smarttraffic(story)
+                r = pipe.publish_current(story)
                 self.last_result["publish_result"] = r
                 source_videos = getattr(source_pipe, "source_videos", []) if source_pipe else []
                 if source_videos:
@@ -5164,7 +5642,8 @@ class App(tk.Tk):
                     )
                     _safe_write_text(
                         out_dir / "chapter_links.txt",
-                        chapter_links_text(
+                        str(r.get("chapter_links_text") or "")
+                        or chapter_links_text(
                             r.get("url", ""),
                             len(story.get("chapters", []))
                         ),

@@ -2,11 +2,13 @@
 
 > Đọc file này trước khi sửa tool. Cập nhật lại mỗi khi rời tool.
 
-## Trạng thái hiện tại (2026-10-05)
-- **Version đang chạy:** v23.6.3
+## Trạng thái hiện tại (2026-10-06)
+- **Version đang chạy:** v23.6.6
 - **Repo GitHub:** https://github.com/NaupUuh/Phong_DHue
 - **Thư mục máy:** `Phong_DHue`
 - **Cách chạy:** bấm đúp `CHAY_Phong_DHue.bat` (hoặc `viet_drama_V23.6_dashboard_thumbnail.py`)
+- **ĐÃ CÓ Adsconex** (port từ ADung, v23.6.6): tab Adsconex + ô "Net đăng bài"
+  ở vùng Source (SmartTraffic mặc định / Adsconex).
 
 ## Đã làm xong
 - Tách khỏi tool kia: config / crash log / cache riêng, không ghi đè nhau.
@@ -105,6 +107,45 @@ python release.py 23.7.0 "Mô tả"
 # đồng bộ lên ổ Z
 python sync_z.py
 ```
+
+### Fix 2026-10-06 (v23.6.6) — PORT TAB/NET ADSCONEX TU ADUNG SANG DHUE
+- **Yeu cau:** ADung (V22.99) co tab + net Adsconex, DHue chua co -> port sang.
+- **Nguyen tac:** port NGUYEN KHOI Adsconex, KHONG dung logic rieng cua DHue
+  (Whisper, `find_person_thumbnail_frame()`, `_choose_source_path()`).
+  `publish_smarttraffic` doi chieu bak: **giong 100%** (11462 ky tu, khong doi 1 ky tu).
+- **Them vao DHue (24 patch):**
+  - `DEFAULT_CONFIG` +7 khoa: `net_provider` (=SmartTraffic), `adsconex_api_key`,
+    `adsconex_base_url`, `adsconex_site_host`, `adsconex_category` (=15),
+    `adsconex_author`, `adsconex_apply_image_to_all`.
+  - Helper: `published_adsconex_link()`, `build_adsconex_chapter_content()`,
+    `active_publish_link()` (MOI — chon link theo net, DHue dung chung cho batch).
+  - Pipeline: `_adsconex_headers()`, `publish_adsconex()`, `publish_current()`
+    (route SmartTraffic/Adsconex) — dat truoc `publish_smarttraffic`.
+  - GUI: tab **Adsconex** (token + Edit Key + base/site/author/category +
+    "Lấy danh sách" + "Kiểm tra token" + "Mở trang API docs" + "Lấy link site"),
+    o chon **"Net đăng bài"** o vung Source, `nb.bind` height 320 cho tab ads.
+  - Batch/rename: `find_saved_publications(..., net_provider, site_host,
+    adsconex_site_host)`; moi cho lay link doi sang `active_publish_link()`;
+    `rename_published_video()` route theo net; `chapter_links_text` uu tien
+    `chapter_links_text` tu response (Adsconex = 1 bai rieng moi chapter).
+  - Queue: `adsconex_test`, `adsconex_categories` + `show_adsconex_categories()`.
+  - GUIDE_TEXT muc 10: giai thich o "Net đăng bài".
+- **Dac thu Adsconex:** `POST /api/posts` `mode="chapter"` -> server tu tach chuong
+  theo marker `CHAPTER N - Title` + tu tao series; link `/blog/<slug>` (LAY TU RESPONSE,
+  khong doan); `category` la so ID; header Chrome de qua Cloudflare.
+- **Test THAT (khong doan):**
+  - `smoke_adsconex_dhue.py`: import OK, 7 khoa config, link `/blog/<slug>`,
+    content 2 marker, `active_publish_link` ca 2 net, route `publish_current`
+    (SmartTraffic/Adsconex/mac dinh), **7 tab co Adsconex**, 3 panel
+    (prompt/script/cau chen), widget + 4 method, combobox Net -> **TAT CA PASS**.
+  - `test_publish_adsconex_dhue.py` (mock HTTP): payload dung (mode/permalink/
+    category int/author/feature_image/apply_image_to_all), 2 file json ghi ra
+    work_dir, `chapter_links_text` "Chapter 1/2: .../blog/...", HTTP 403 ->
+    raise, thieu token -> raise, thieu posts -> raise, thumbnail http (khong
+    https) -> bo qua feature_image, thieu marker -> chan TRUOC khi POST -> **PASS**.
+  - GUI chay bang **config THAT** cua user: khong doi config (MD5 y nguyen),
+    `net_provider` mac dinh SmartTraffic, category 15.
+- **Bump:** `APP_VERSION` 23.6.5 -> **23.6.6**.
 
 ### Fix 2026-10-05 (v23.6.5) — GOM O "CAU CHEN" VAO TAB KICH BAN & PROMPT
 - **Yeu cau:** o "Cau chen trong ten file" nam rieng o vung Source lam trang cao. Gom xuong tab
