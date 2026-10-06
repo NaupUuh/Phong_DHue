@@ -279,7 +279,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.11"
+APP_VERSION = "23.6.12"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -419,8 +419,8 @@ DEFAULT_CONFIG = {
     "site_host": "drama.viralstory.biz",
     "net_provider": "SmartTraffic",
     "adsconex_api_key": "",
-    "adsconex_base_url": "https://usjusticereport.cfx.bz/api",
-    "adsconex_site_host": "usjusticereport.cfx.bz",
+    "adsconex_base_url": "https://dramanest.gigglelo.com/api",
+    "adsconex_site_host": "dramanest.gigglelo.com",
     "adsconex_category": "15",
     "adsconex_author": "",
     "adsconex_apply_image_to_all": True,
@@ -564,7 +564,7 @@ def find_unpublished_videos(folder: Path) -> List[Path]:
 
 def find_saved_publications(output_root: Path, videos: List[Path], net_provider: str = "SmartTraffic",
                             site_host: str = "drama.viralstory.biz",
-                            adsconex_site_host: str = "usjusticereport.cfx.bz") -> dict:
+                            adsconex_site_host: str = "dramanest.gigglelo.com") -> dict:
     """Find existing article IDs for source videos before any new publish POST."""
     from collections import Counter
     name_counts = Counter(v.name.casefold() for v in videos)
@@ -3708,8 +3708,8 @@ Return STRICT JSON only:
     # ============================================================
     def _adsconex_headers(self, token: str) -> dict:
         """Header Chrome de qua Cloudflare (thieu sec-ch-ua/Sec-Fetch bi chan 1010)."""
-        base = str(self.cfg.get("adsconex_base_url") or "https://usjusticereport.cfx.bz/api").strip().rstrip("/")
-        host = urlsplit(base).netloc or "usjusticereport.cfx.bz"
+        base = str(self.cfg.get("adsconex_base_url") or "https://dramanest.gigglelo.com/api").strip().rstrip("/")
+        host = urlsplit(base).netloc or "dramanest.gigglelo.com"
         return {
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.9",
@@ -3733,7 +3733,7 @@ Return STRICT JSON only:
         Tra (response, data, payload). KHONG raise: caller tu quyet dinh theo
         response.status_code (r = None nghia la loi mang sau khi het luot thu).
         """
-        base = str(self.cfg.get("adsconex_base_url") or "https://usjusticereport.cfx.bz/api").strip().rstrip("/")
+        base = str(self.cfg.get("adsconex_base_url") or "https://dramanest.gigglelo.com/api").strip().rstrip("/")
         endpoint = f"{base}/posts"
         token = str(self.cfg.get("adsconex_api_key", "") or "").strip()
         headers = self._adsconex_headers(token)
@@ -3820,7 +3820,7 @@ Return STRICT JSON only:
         if not token:
             raise RuntimeError("Adsconex API token đang trống. Nhập trong tab Adsconex.")
 
-        base = str(self.cfg.get("adsconex_base_url") or "https://usjusticereport.cfx.bz/api").strip().rstrip("/")
+        base = str(self.cfg.get("adsconex_base_url") or "https://dramanest.gigglelo.com/api").strip().rstrip("/")
         endpoint = f"{base}/posts"
         headers = self._adsconex_headers(token)
 
@@ -3899,6 +3899,18 @@ Return STRICT JSON only:
                 self._log(
                     "Adsconex: origin dang sap lien tuc (>=2 bai loi) -> tu day chi thu 1 lan/bai "
                     "roi luu payload, KHONG cho retry dai. Cuoi batch se dang lai."
+                )
+            if r.status_code in (401, 403):
+                # 401/403 = token bi tang verify tu choi (blogbio_verify_failed /
+                # missing_bearer_token). Da kiem chung tren site that: bai 403 KHONG he
+                # duoc tao (tra 404) -> dang lai KHONG sinh bai trung. Luu payload de
+                # khong mat bai (truoc day 42 bai 403 bi mat trang) va noi ro nguyen nhan.
+                adsconex_write_pending(self.work_dir, payload, r.status_code, detail)
+                raise RuntimeError(
+                    f"Adsconex HTTP {r.status_code} - TOKEN BI TU CHOI (blogbio_verify_failed). "
+                    f"Kiem tra: (1) API base URL co dung host dang chay khong, (2) token con hieu luc "
+                    f"khong - bam nut 'Kiem tra token' trong tab Adsconex. "
+                    f"Da luu payload de dang lai (nut 'Dang lai bai loi'). Chi tiet: {detail}"
                 )
             if _adsconex_is_transient(r.status_code, data):
                 # 502/503/504/429/520-524: origin chua tao bai (da kiem chung 12/12 tra 404)
@@ -5414,7 +5426,7 @@ class App(tk.Tk):
             ads_buttons,
             text="Mở trang API docs",
             command=lambda: webbrowser.open(
-                str(self.vars["adsconex_site_host"].get() or "usjusticereport.cfx.bz").rstrip("/")
+                str(self.vars["adsconex_site_host"].get() or "dramanest.gigglelo.com").rstrip("/")
                 + "/admin/api-docs")
         ).pack(side="left")
         ttk.Button(
@@ -5431,7 +5443,7 @@ class App(tk.Tk):
             ads_buttons,
             text="Lấy link site",
             command=lambda: webbrowser.open(
-                "https://" + str(self.vars["adsconex_site_host"].get() or "usjusticereport.cfx.bz").strip().strip("/"))
+                "https://" + str(self.vars["adsconex_site_host"].get() or "dramanest.gigglelo.com").strip().strip("/"))
         ).pack(side="left", padx=6)
 
         ads_rate = ttk.LabelFrame(ads, text="Giới hạn tốc độ đăng (dùng chung cho MỌI máy)")
@@ -5943,8 +5955,8 @@ class App(tk.Tk):
         if not token:
             messagebox.showwarning(APP_NAME, "Chưa nhập Adsconex API Token.")
             return
-        base = str(self.vars["adsconex_base_url"].get() or "https://usjusticereport.cfx.bz/api").strip().rstrip("/")
-        site = str(self.vars["adsconex_site_host"].get() or "usjusticereport.cfx.bz").strip().strip("/")
+        base = str(self.vars["adsconex_base_url"].get() or "https://dramanest.gigglelo.com/api").strip().rstrip("/")
+        site = str(self.vars["adsconex_site_host"].get() or "dramanest.gigglelo.com").strip().strip("/")
         host = urlsplit(base).netloc or site
         headers = {
             "Accept": "application/json, text/plain, */*",
@@ -5991,7 +6003,7 @@ class App(tk.Tk):
         if not token:
             messagebox.showwarning(APP_NAME, "Chưa nhập Adsconex API Token.")
             return
-        base = str(self.vars["adsconex_base_url"].get() or "https://usjusticereport.cfx.bz/api").strip().rstrip("/")
+        base = str(self.vars["adsconex_base_url"].get() or "https://dramanest.gigglelo.com/api").strip().rstrip("/")
         host = urlsplit(base).netloc or str(self.vars["adsconex_site_host"].get() or "").strip().strip("/")
         headers = {
             "Accept": "application/json, text/plain, */*",

@@ -1,5 +1,5 @@
 {
-  "version": "23.6.11",
-  "notes": "Toi uu ti le dang duoc bai khi origin Cloudflare 502: luu payload bai loi roi tu dang lai (khong ton Vision/Writer), tu dang lai cuoi batch, nut 'Dang lai bai loi' trong tab Adsconex, va circuit breaker (2 bai loi lien tiep -> chi thu 1 lan/bai, khong cho backoff 4 phut/bai).",
+  "version": "23.6.12",
+  "notes": "Bo host chet usjusticereport.cfx.bz: chi dung host dien trong tool (mac dinh dramanest.gigglelo.com). Vá 401/403: token bi tu choi -> LUU payload de dang lai (truoc day 42 bai 403 bi mat trang) va bao ro nguyen nhan. Sua loi ADS dung nham host chet -> 403 blogbio_verify_failed.",
   "date": "2026-10-06"
 }
