@@ -1,5 +1,5 @@
 {
-  "version": "23.6.12",
-  "notes": "Bo host chet usjusticereport.cfx.bz: chi dung host dien trong tool (mac dinh dramanest.gigglelo.com). Vá 401/403: token bi tu choi -> LUU payload de dang lai (truoc day 42 bai 403 bi mat trang) va bao ro nguyen nhan. Sua loi ADS dung nham host chet -> 403 blogbio_verify_failed.",
-  "date": "2026-10-06"
+  "version": "23.6.13",
+  "notes": "Nut 'Kiem tra token' bao ro khi 401/403: token bi tu choi (blogbio_verify_failed) hoac base URL tro sai host. Truoc do chi hien HTTP 403 kho hieu.",
+  "date": "2026-10-07"
 }
