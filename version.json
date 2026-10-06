@@ -1,5 +1,5 @@
 {
-  "version": "23.6.10",
-  "notes": "Gioi han toc do dang Adsconex dung chung nhieu may: 6 bai/phut tong (cua so truot 60s + gian cach toi thieu 60/N giay), mutex O_CREAT|O_EXCL tren o Z (RaiDrive), tu gian cach tai may khi Z loi. Va loi HTTP 422 seo_description (chuoi chua '--' bi server tu choi -> lam sach + go truong roi dang lai thay vi mat bai).",
+  "version": "23.6.11",
+  "notes": "Toi uu ti le dang duoc bai khi origin Cloudflare 502: luu payload bai loi roi tu dang lai (khong ton Vision/Writer), tu dang lai cuoi batch, nut 'Dang lai bai loi' trong tab Adsconex, va circuit breaker (2 bai loi lien tiep -> chi thu 1 lan/bai, khong cho backoff 4 phut/bai).",
   "date": "2026-10-06"
 }

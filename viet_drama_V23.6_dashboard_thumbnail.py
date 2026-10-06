@@ -279,7 +279,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.10"
+APP_VERSION = "23.6.11"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -910,6 +910,114 @@ def _adsconex_wait_for_slot(cfg, log=None) -> str:
             note += " (cho %.0fs)" % waited
         return note
     return "tran chung %d bai/phut" % per_min
+
+
+# ---------------------------------------------------------------------------
+# BAI LOI 502: luu payload lai de dang lai sau (khong ton Vision/Writer)
+# ---------------------------------------------------------------------------
+# 502 Cloudflare origin_bad_gateway = origin qua tai TUC THOI. Da kiem chung tren
+# site that: 12/12 bai 502 deu tra 404 -> chua he tao bai, nen dang lai KHONG sinh
+# bai trung. Origin sap hang gio nen retry trong vai phut la vo ich; thay vao do
+# luu payload xuong work_dir roi dang lai khi origin hoi: cuoi batch, hoac bam nut
+# "Dang lai bai loi" trong tab Adsconex.
+ADSCONEX_PENDING_FILE = "publish_pending_adsconex.json"
+
+# Circuit breaker: origin Cloudflare sap HANG GIO thi retry 3 lan x 60/120s cho moi bai
+# chi lam batch cham them hang gio ma khong cuu duoc bai nao. Bien nay la TRANG THAI CHUNG
+# ca tien trinh (batch tao StoryPipeline moi cho moi video, thuoc tinh instance se bi reset).
+# >=2 bai loi LIEN TIEP -> cac bai sau chi thu 1 lan roi luu payload de dang lai sau.
+_adsconex_fail_streak = [0]
+_adsconex_fail_streak_lock = threading.Lock()
+ADSCONEX_FAIL_STREAK_LIMIT = 2
+
+
+def adsconex_fail_streak() -> int:
+    with _adsconex_fail_streak_lock:
+        return _adsconex_fail_streak[0]
+
+
+def adsconex_note_result(ok: bool) -> None:
+    """Cap nhat chuoi loi lien tiep: thanh cong -> 0, loi tam thoi -> +1."""
+    with _adsconex_fail_streak_lock:
+        _adsconex_fail_streak[0] = 0 if ok else _adsconex_fail_streak[0] + 1
+
+
+def adsconex_origin_down() -> bool:
+    return adsconex_fail_streak() >= ADSCONEX_FAIL_STREAK_LIMIT
+
+
+def adsconex_pending_path(work_dir):
+    return Path(work_dir) / ADSCONEX_PENDING_FILE
+
+
+def adsconex_write_pending(work_dir, payload: dict, status, detail: str = "") -> None:
+    """Ghi payload cua bai dang loi (502/503/504/429/network) de lan sau dang lai."""
+    if not work_dir or not isinstance(payload, dict) or not payload.get("content"):
+        return
+    try:
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        _safe_write_text(
+            adsconex_pending_path(work_dir),
+            json.dumps({
+                "http_status": status,
+                "detail": str(detail)[:800],
+                "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "machine": platform.node(),
+                "payload": payload,
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def adsconex_clear_pending(work_dir) -> None:
+    """Xoa dau 'con bai loi' khi da dang thanh cong."""
+    if not work_dir:
+        return
+    try:
+        adsconex_pending_path(work_dir).unlink()
+    except OSError:
+        pass
+    except Exception:
+        pass
+
+
+def _adsconex_has_published(work_dir) -> bool:
+    """True khi work_dir da co bai dang thanh cong (co URL hoac ID that)."""
+    try:
+        path = Path(work_dir) / "publish_result.json"
+        if not path.is_file():
+            return False
+        data = json.loads(path.read_text(encoding="utf-8") or "{}")
+        return bool(isinstance(data, dict) and (data.get("url") or data.get("id")))
+    except Exception:
+        return False
+
+
+def find_pending_adsconex(output_root) -> list:
+    """Liet ke [(work_dir, payload)] cua cac bai tung loi va CHUA dang duoc."""
+    items = []
+    try:
+        root = Path(output_root)
+    except Exception:
+        return items
+    if not root.is_dir():
+        return items
+    for work_dir in sorted(root.glob("_story_output_*"), key=lambda p: p.name):
+        if _adsconex_has_published(work_dir):
+            continue
+        path = adsconex_pending_path(work_dir)
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8") or "{}")
+        except Exception:
+            continue
+        payload = data.get("payload") if isinstance(data, dict) else None
+        if isinstance(payload, dict) and payload.get("content"):
+            items.append((work_dir, payload))
+    return items
 
 
 def published_adsconex_link(result: dict, site_host: str) -> str:
@@ -3619,6 +3727,89 @@ Return STRICT JSON only:
             "Sec-Fetch-Site": "same-origin",
         }
 
+    def _adsconex_send(self, payload: dict):
+        """POST /posts kem retry loi TAM THOI + xin luot tran toc do dung chung.
+
+        Tra (response, data, payload). KHONG raise: caller tu quyet dinh theo
+        response.status_code (r = None nghia la loi mang sau khi het luot thu).
+        """
+        base = str(self.cfg.get("adsconex_base_url") or "https://usjusticereport.cfx.bz/api").strip().rstrip("/")
+        endpoint = f"{base}/posts"
+        token = str(self.cfg.get("adsconex_api_key", "") or "").strip()
+        headers = self._adsconex_headers(token)
+
+        # Retry loi TAM THOI (Cloudflare 502 origin_bad_gateway / 503 / 504 / 429)
+        # kem backoff theo Retry-After. 502 nghia la origin chua tao bai (da kiem chung
+        # tren site that), nen thu lai KHONG sinh bai trung.
+        max_attempts = max(1, min(6, safe_int(self.cfg.get("adsconex_retry_count", 3), 3)))
+        base_delay = max(5.0, safe_float(self.cfg.get("adsconex_retry_delay", 60), 60.0))
+        # Circuit breaker: origin da sap lien tiep >=2 bai thi chi thu 1 lan roi luu payload.
+        # Retry 3 lan x 60/120s cho MOI bai lam batch cham hang gio ma vo ich (origin sap
+        # hang gio thi vai phut khong cuu duoc). Bai loi van duoc luu lai de dang lai sau.
+        if adsconex_origin_down():
+            max_attempts = 1
+        r = None
+        data = {}
+        seo_stripped = False
+        for attempt in range(1, max_attempts + 1):
+            # Tran toc do dung chung: cho toi khi co luot moi POST.
+            self._log("Adsconex xin luot dang: " + _adsconex_wait_for_slot(self.cfg))
+            try:
+                r = requests.post(endpoint, headers=headers, json=payload, timeout=180)
+            except Exception as e:
+                r = None
+                data = {"network_error": str(e)}
+                if attempt >= max_attempts:
+                    break
+                wait_s = min(base_delay * (2 ** (attempt - 1)), 300.0)
+                self._log(f"Adsconex network error ({e}) | thu lai {attempt + 1}/{max_attempts} sau {wait_s:.0f}s")
+                time.sleep(wait_s)
+                continue
+
+            try:
+                data = r.json()
+            except Exception:
+                data = {"raw": r.text[:2000]}
+
+            if r.status_code in (200, 201):
+                adsconex_note_result(True)
+                break
+
+            if r.status_code == 422 and "seo_description" in json.dumps(data, ensure_ascii=False).lower() \
+                    and "seo_description" in payload and not seo_stripped:
+                # Server tu choi meta description (da gap that: chuoi chua '--').
+                # Go han truong nay roi gui lai -> bai van dang duoc, chi thieu meta
+                # description, thay vi mat ca bai.
+                payload.pop("seo_description", None)
+                seo_stripped = True
+                self._log(
+                    "Adsconex 422: seo_description bi tu choi -> go truong nay va dang lai "
+                    "(bai van len, chi thieu meta description)."
+                )
+                continue
+
+            if attempt >= max_attempts or not _adsconex_is_transient(r.status_code, data):
+                break
+
+            wait_s = max(5.0, _adsconex_retry_after_seconds(r, base_delay * (2 ** (attempt - 1))))
+            detail = json.dumps(data, ensure_ascii=False)[:200] if isinstance(data, (dict, list)) else str(data)[:200]
+            self._log(
+                f"Adsconex HTTP {r.status_code} (loi tam thoi) | thu lai {attempt + 1}/{max_attempts} "
+                f"sau {wait_s:.0f}s | {detail}"
+            )
+            time.sleep(wait_s)
+
+        # Dem so bai loi LIEN TIEP de bat circuit breaker (origin sap hang gio).
+        # Chi tinh la "loi" khi that su tam thoi (502/503/504/429/520-524 hoac loi mang);
+        # 422/401/500 khong lam bat breaker.
+        if r is not None and r.status_code in (200, 201):
+            adsconex_note_result(True)
+        elif r is None or _adsconex_is_transient(r.status_code, data):
+            adsconex_note_result(False)
+        else:
+            adsconex_note_result(True)
+        return r, data, payload
+
     def publish_adsconex(self, story: dict) -> dict:
         """Dang bai len Adsconex (nen Blogbio) o che do chapter.
 
@@ -3685,77 +3876,37 @@ Return STRICT JSON only:
             f"thumbnail={'YES' if 'feature_image' in payload else 'NO'} | "
             f"category={payload.get('category', 'none')}"
         )
-        # Retry loi TAM THOI (Cloudflare 502 origin_bad_gateway / 503 / 504 / 429)
-        # kem backoff theo Retry-After. 502 nghia la origin chua tao bai (da kiem chung
-        # tren site that), nen thu lai KHONG sinh bai trung.
-        max_attempts = max(1, min(6, safe_int(self.cfg.get("adsconex_retry_count", 3), 3)))
-        base_delay = max(5.0, safe_float(self.cfg.get("adsconex_retry_delay", 60), 60.0))
-        r = None
-        data = {}
-        seo_stripped = False
-        for attempt in range(1, max_attempts + 1):
-            # Tran toc do dung chung: cho toi khi co luot moi POST.
-            self._log("Adsconex xin luot dang: " + _adsconex_wait_for_slot(self.cfg))
-            try:
-                r = requests.post(endpoint, headers=headers, json=payload, timeout=180)
-            except Exception as e:
-                if attempt >= max_attempts:
-                    raise RuntimeError(f"Adsconex network error sau {attempt} lan thu: {e}")
-                wait_s = min(base_delay * (2 ** (attempt - 1)), 300.0)
-                self._log(f"Adsconex network error ({e}) | thu lai {attempt + 1}/{max_attempts} sau {wait_s:.0f}s")
-                time.sleep(wait_s)
-                continue
-
-            try:
-                data = r.json()
-            except Exception:
-                data = {"raw": r.text[:2000]}
-
-            if r.status_code in (200, 201):
-                break
-
-            if r.status_code == 422 and "seo_description" in json.dumps(data, ensure_ascii=False).lower() \
-                    and "seo_description" in payload and not seo_stripped:
-                # Server tu choi meta description (da gap that: chuoi chua '--').
-                # Go han truong nay roi gui lai -> bai van dang duoc, chi thieu meta
-                # description, thay vi mat ca bai.
-                payload.pop("seo_description", None)
-                seo_stripped = True
-                self._log(
-                    "Adsconex 422: seo_description bi tu choi -> go truong nay va dang lai "
-                    "(bai van len, chi thieu meta description)."
-                )
-                continue
-
-            if attempt >= max_attempts or not _adsconex_is_transient(r.status_code, data):
-                break
-
-            wait_s = max(5.0, _adsconex_retry_after_seconds(r, base_delay * (2 ** (attempt - 1))))
-            detail = json.dumps(data, ensure_ascii=False)[:200] if isinstance(data, (dict, list)) else str(data)[:200]
-            self._log(
-                f"Adsconex HTTP {r.status_code} (loi tam thoi) | thu lai {attempt + 1}/{max_attempts} "
-                f"sau {wait_s:.0f}s | {detail}"
-            )
-            time.sleep(wait_s)
-
-        if r is None:
-            raise RuntimeError("Adsconex: khong gui duoc yeu cau nao.")
-
-        try:
-            data = r.json()
-        except Exception:
-            data = {"raw": r.text[:2000]}
+        r, data, payload = self._adsconex_send(payload)
 
         if self.work_dir:
             try:
                 _safe_write_text(self.work_dir / "publish_response_adsconex.json",
-                                 json.dumps({"http_status": r.status_code, "response": data},
+                                 json.dumps({"http_status": (r.status_code if r is not None else "network"),
+                                             "response": data},
                                             ensure_ascii=False, indent=2), encoding="utf-8")
             except Exception:
                 pass
 
+        if r is None:
+            detail = json.dumps(data, ensure_ascii=False)[:400] if isinstance(data, (dict, list)) else str(data)[:400]
+            # Loi mang: chac chan chua tao bai -> luu payload de dang lai.
+            adsconex_write_pending(self.work_dir, payload, "network", detail)
+            raise RuntimeError(f"Adsconex network error: {detail}")
+
         if r.status_code not in (200, 201):
             detail = json.dumps(data, ensure_ascii=False)[:800] if isinstance(data, (dict, list)) else str(data)[:800]
+            if adsconex_origin_down():
+                self._log(
+                    "Adsconex: origin dang sap lien tuc (>=2 bai loi) -> tu day chi thu 1 lan/bai "
+                    "roi luu payload, KHONG cho retry dai. Cuoi batch se dang lai."
+                )
+            if _adsconex_is_transient(r.status_code, data):
+                # 502/503/504/429/520-524: origin chua tao bai (da kiem chung 12/12 tra 404)
+                # -> luu payload de dang lai sau, khong ton Vision/Writer.
+                adsconex_write_pending(self.work_dir, payload, r.status_code, detail)
+                raise RuntimeError(
+                    f"Adsconex HTTP {r.status_code} (loi tam thoi - da luu payload de dang lai): {detail}"
+                )
             raise RuntimeError(f"Adsconex HTTP {r.status_code}: {detail}")
 
         posts = data.get("posts") if isinstance(data, dict) else None
@@ -3783,6 +3934,7 @@ Return STRICT JSON only:
 
         self._log(f"Adsconex accepted | HTTP {r.status_code} | chapters={len(posts)} | url={link}")
         self._step_end("Adsconex publish")
+        adsconex_clear_pending(self.work_dir)
         return {
             "url": link,
             "id": (posts[0] or {}).get("postId") if isinstance(posts[0], dict) else None,
@@ -3956,6 +4108,107 @@ Return STRICT JSON only:
                 time.sleep(0.5)
 
         raise RuntimeError(f"{last_error}\n\nRequest/response debug đã được lưu trong output folder.")
+
+    def republish_pending(self, work_dir, payload: dict) -> dict:
+        """Dang lai payload da luu cua bai loi 502. KHONG ton Vision/Writer.
+
+        Dung lai story.json + source_video.json trong work_dir de doi ten video sau
+        khi dang thanh cong. Tra dict ket qua, hoac {} khi van loi.
+        """
+        work_dir = Path(work_dir)
+        previous_work_dir = getattr(self, "work_dir", None)
+        self.work_dir = work_dir
+        try:
+            r, data, payload = self._adsconex_send(payload)
+            try:
+                _safe_write_text(work_dir / "publish_response_adsconex.json",
+                                 json.dumps({"http_status": (r.status_code if r is not None else "network"),
+                                             "response": data},
+                                            ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+
+            if r is None or r.status_code not in (200, 201):
+                detail = (json.dumps(data, ensure_ascii=False)[:600]
+                          if isinstance(data, (dict, list)) else str(data)[:600])
+                adsconex_write_pending(work_dir, payload,
+                                       (r.status_code if r is not None else "network"), detail)
+                self._log(f"[{work_dir.name}] Van loi: {detail[:200]}")
+                return {}
+
+            posts = data.get("posts") if isinstance(data, dict) else None
+            if not isinstance(posts, list) or not posts:
+                detail = (json.dumps(data, ensure_ascii=False)[:400]
+                          if isinstance(data, (dict, list)) else str(data)[:400])
+                adsconex_write_pending(work_dir, payload, r.status_code, "thieu 'posts': " + detail)
+                self._log(f"[{work_dir.name}] Response thieu 'posts': {detail[:200]}")
+                return {}
+
+            site_host = self.cfg.get("adsconex_site_host", "")
+            link = published_adsconex_link({"posts": posts}, site_host)
+            if not link:
+                first = posts[0] if isinstance(posts[0], dict) else {}
+                link = str(first.get("link") or first.get("url") or "").strip()
+
+            chapter_links = []
+            for idx, post in enumerate(posts, 1):
+                if not isinstance(post, dict):
+                    continue
+                one = published_adsconex_link({"posts": [post]}, site_host)
+                if one:
+                    chapter_links.append(f"Chapter {idx}: {one}")
+            chapter_links_text_value = "\n".join(chapter_links) + ("\n" if chapter_links else "")
+
+            publish_result = {
+                "url": link,
+                "id": (posts[0] or {}).get("postId") if isinstance(posts[0], dict) else None,
+                "chapters": posts,
+                "chapter_links": chapter_links,
+                "chapter_links_text": chapter_links_text_value,
+                "count": len(posts),
+                "provider": "Adsconex",
+                "response": data,
+                "republished_from_pending": True,
+                "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            try:
+                _safe_write_text(work_dir / "publish_result.json",
+                                 json.dumps(publish_result, ensure_ascii=False, indent=2), encoding="utf-8")
+                _safe_write_text(work_dir / "chapter_links.txt", chapter_links_text_value, encoding="utf-8")
+            except Exception:
+                pass
+            adsconex_clear_pending(work_dir)
+            self._log(f"[{work_dir.name}] DA DANG LAI | HTTP {r.status_code} | chapters={len(posts)} | url={link}")
+
+            # Doi ten video (chi khi dang thanh cong va video goc con nguyen ten).
+            story = {}
+            try:
+                story_path = work_dir / "story.json"
+                if story_path.is_file():
+                    story = json.loads(story_path.read_text(encoding="utf-8") or "{}")
+            except Exception:
+                story = {}
+            video_path = None
+            try:
+                src = work_dir / "source_video.json"
+                if src.is_file():
+                    info = json.loads(src.read_text(encoding="utf-8") or "{}")
+                    video_path = Path(str(info.get("path") or ""))
+            except Exception:
+                video_path = None
+            renamed = ""
+            if isinstance(story, dict) and story and video_path is not None and video_path.is_file():
+                script_path = work_dir / "video_script.txt"
+                script_text = script_path.read_text(encoding="utf-8") if script_path.is_file() else ""
+                try:
+                    renamed = self.rename_published_video(video_path, story, publish_result, script_text)
+                except Exception as exc:
+                    self._log(f"[{work_dir.name}] Dang OK nhung doi ten video loi: {exc}")
+
+            return {"work_dir": str(work_dir), "story": story,
+                    "publish_result": publish_result, "renamed_video": renamed}
+        finally:
+            self.work_dir = previous_work_dir
 
     def _republish_with_alternate_marker(self, story: dict, marker: str, headers: dict) -> Optional[dict]:
         """V21.1: Re-post the same story with a different page-break marker so the
@@ -5166,6 +5419,11 @@ class App(tk.Tk):
         ).pack(side="left")
         ttk.Button(
             ads_buttons,
+            text="Đăng lại bài lỗi",
+            command=self.republish_failed_posts
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            ads_buttons,
             text="Kiểm tra token",
             command=self.test_adsconex_token
         ).pack(side="left", padx=6)
@@ -5876,6 +6134,17 @@ class App(tk.Tk):
                         messagebox.showerror("Adsconex token", item[1])
                 elif item[0] == "adsconex_categories":
                     self.show_adsconex_categories(item[1])
+                elif item[0] == "adsconex_republish_done":
+                    ok, fail = item[1]
+                    self.run_btn.config(state="normal")
+                    if fail:
+                        messagebox.showwarning(
+                            "Đăng lại bài lỗi",
+                            f"Đã đăng lại thành công {ok} bài.\nCòn {fail} bài vẫn lỗi "
+                            "(origin chưa hồi) — bấm lại nút sau vài phút."
+                        )
+                    else:
+                        messagebox.showinfo("Đăng lại bài lỗi", f"Đã đăng lại thành công {ok} bài.")
                 elif item[0] == "model_test":
                     messagebox.showinfo("Vilao model access", item[1])
                 elif item[0] == "published":
@@ -5900,6 +6169,59 @@ class App(tk.Tk):
             pass
         self.after(100, self._poll_queue)
 
+
+    def republish_failed_posts(self):
+        """Quet folder dang chon: dang lai moi bai da luu payload (502) - khong ton Vision/Writer."""
+        p1 = self.input_path.get().strip()
+        folder = Path(p1) if p1 and Path(p1).is_dir() else None
+        if folder is None:
+            messagebox.showinfo(APP_NAME, "Chọn folder batch vào ô đường dẫn trước, rồi bấm lại.")
+            return
+        cfg = self.current_cfg()
+        if not str(cfg.get("net_provider") or "").strip().lower().startswith("ads"):
+            messagebox.showwarning(APP_NAME, "Mục 'Net đăng bài' phải là Adsconex mới đăng lại được.")
+            return
+        if not str(cfg.get("adsconex_api_key") or "").strip():
+            messagebox.showwarning(APP_NAME, "Chưa nhập Adsconex API Token trong tab Adsconex.")
+            return
+        output_root = folder / "Story Outputs"
+        pending = find_pending_adsconex(output_root)
+        if not pending:
+            messagebox.showinfo(APP_NAME, f"Không có bài lỗi nào cần đăng lại trong:\n{output_root}")
+            return
+        if not messagebox.askyesno(
+            APP_NAME,
+            f"Tìm thấy {len(pending)} bài lỗi đã lưu payload trong:\n{output_root}\n\n"
+            "Đăng lại ngay? (không tốn Vision/Writer, video tự đổi tên nếu đăng được)"
+        ):
+            return
+        self.log(f"DANG LAI BAI LOI: {len(pending)} bai trong {output_root}")
+        self.run_btn.config(state="disabled")
+
+        def worker():
+            ok = 0
+            fail = 0
+            retry_cfg = dict(cfg)
+            retry_cfg["story_output_root"] = str(output_root)
+            pipe = StoryPipeline(retry_cfg, self.log, self.progress)
+            for work_dir, payload in pending:
+                try:
+                    res = pipe.republish_pending(work_dir, payload)
+                except Exception as exc:
+                    res = {}
+                    self.log(f"[{work_dir.name}] LOI: {exc}")
+                if res:
+                    ok += 1
+                    link = (res.get("publish_result") or {}).get("url", "")
+                    extra = " | doi ten video OK" if res.get("renamed_video") else ""
+                    self.log(f"[{work_dir.name}] DA DANG LAI: {link}{extra}")
+                else:
+                    fail += 1
+            self.log(f"DANG LAI XONG: thanh cong {ok} | con loi {fail} "
+                     f"(bam lai nut nay sau vai phut de thu tiep)")
+            self.q.put(("adsconex_republish_done", (ok, fail)))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def start_run(self):
         p1_text = self.input_path.get().strip()
@@ -6030,6 +6352,63 @@ class App(tk.Tk):
                                         sum(r['status']=='failed' for r in rows)))
                             self.q.put(("progress", 100 * len(rows) / len(sources),
                                         f"Đã xử lý {len(rows)}/{len(sources)} | Lỗi {sum(r['status']=='failed' for r in rows)}"))
+                    # ---- Dang lai cac bai 502 da luu payload (cuoi batch, origin da hoi) ----
+                    # Khong ton Vision/Writer: chi gui lai dung payload da luu.
+                    try:
+                        pending = find_pending_adsconex(output_root)
+                    except Exception:
+                        pending = []
+                    if pending:
+                        self.log(f"BATCH: dang lai {len(pending)} bai loi da luu payload "
+                                 f"(khong ton Vision/Writer)...")
+                        retry_cfg = dict(cfg)
+                        retry_cfg["story_output_root"] = str(output_root)
+                        retry_pipe = StoryPipeline(retry_cfg, self.log, lambda *args: None)
+                        fixed = 0
+                        stuck = 0
+                        for work_dir, payload in pending:
+                            try:
+                                res = retry_pipe.republish_pending(work_dir, payload)
+                            except Exception as exc:
+                                self.log(f"[{work_dir.name}] Dang lai loi: {exc}")
+                                res = {}
+                            if not res:
+                                stuck += 1
+                                # Origin van sap: 3 bai lien tiep khong dang duoc thi dung
+                                # som, khong ngoi cho het danh sach (moi bai mat ~10s luot).
+                                if stuck >= 3:
+                                    self.log(
+                                        f"BATCH: origin van chua hoi ({stuck} bai lien tiep loi) "
+                                        f"-> dung dang lai, con {len(pending) - fixed - stuck} bai giu nguyen payload."
+                                    )
+                                    break
+                                continue
+                            stuck = 0
+                            fixed += 1
+                            link = (res.get("publish_result") or {}).get("url", "")
+                            title = compact_meta_text((res.get("story") or {}).get("title") or "", 240)
+                            row_done = False
+                            for row in rows:
+                                if row.get("status") == "failed" and \
+                                        os.path.normcase(str(row.get("output") or "")) == \
+                                        os.path.normcase(str(work_dir)):
+                                    row["status"] = "success"
+                                    row["error"] = ""
+                                    row["renamed_video"] = res.get("renamed_video", "")
+                                    row["article_url"] = link
+                                    row["net_title"] = title
+                                    row_done = True
+                                    break
+                            if not row_done:
+                                rows.append({"video": work_dir.name, "status": "success",
+                                             "renamed_video": res.get("renamed_video", ""),
+                                             "article_url": link, "net_title": title,
+                                             "output": str(work_dir)})
+                        self.log(f"BATCH: dang lai xong - thanh cong {fixed}/{len(pending)} bai loi.")
+                        self.q.put(("batch_stats", sum(r['status']=='success' for r in rows),
+                                    sum(r['status']=='failed' for r in rows)))
+                        self.q.put(("progress", 100.0,
+                                    f"Da dang lai {fixed}/{len(pending)} bai loi"))
                     report_path = output_root / f"batch_result_{time.strftime('%Y%m%d-%H%M%S')}.json"
                     _safe_write_text(report_path, json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
                     titles_path = report_path.with_name(report_path.stem.replace("batch_result_", "net_titles_") + ".txt")
