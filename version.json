@@ -1,5 +1,5 @@
 {
-  "version": "23.6.6",
-  "notes": "Port tab + net Adsconex tu ADung sang DHue (token, category, author, apply_image_to_all); o chon Net dang bai; link /blog/<slug>; chapter_links_text rieng cho Adsconex",
+  "version": "23.6.7",
+  "notes": "Anh bia: thay Haar cascade (OpenCV 5.x da xoa han -> FACE_CASCADE=None khien tool mu mat, anh bia hay ra canh khong nguoi) bang YuNet + model cam xuc. Uu tien anh CO NGUOI > net nhat > drama/cam xuc cao. Cat vuong 290x290 theo khuon mat, khong cat tran. Model tu tai ve ~/.video_story_publisher_models, co offline fallback.",
   "date": "2026-10-06"
 }

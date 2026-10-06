@@ -227,7 +227,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.6"
+APP_VERSION = "23.6.7"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -974,27 +974,282 @@ def cv2_imwrite_unicode(path: Path, image, quality: int = 88) -> bool:
 
 
 
-def _load_face_cascade():
+# ---------------------------------------------------------------------------
+#  NHAN DIEN KHUON MAT + CAM XUC
+#  (Haar cascade cua ban cu da bi OpenCV 5.x xoa -> FACE_CASCADE = None
+#   -> tool khong phat hien duoc khuon mat. Thay bang YuNet.)
+#  Model tu tai ve ~/.video_story_publisher_models, chi tai 1 lan.
+# ---------------------------------------------------------------------------
+FACE_MODEL_FILE = "face_detection_yunet_2023mar.onnx"
+EMOTION_MODEL_FILE = "facial_expression_recognition_mobilefacenet_2022july_int8bq.onnx"
+
+FACE_MODEL_URLS = (
+    "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/"
+    "face_detection_yunet/" + FACE_MODEL_FILE,
+    "https://raw.githubusercontent.com/opencv/opencv_zoo/main/models/"
+    "face_detection_yunet/" + FACE_MODEL_FILE,
+)
+EMOTION_MODEL_URLS = (
+    "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/"
+    "facial_expression_recognition/" + EMOTION_MODEL_FILE,
+    "https://raw.githubusercontent.com/opencv/opencv_zoo/main/models/"
+    "facial_expression_recognition/" + EMOTION_MODEL_FILE,
+)
+FACE_MIN_BYTES = 80000
+EMOTION_MIN_BYTES = 500000
+
+# Thu tu nhan do model tra ve (opencv_zoo / facial_expression_recognition)
+EMOTION_LABELS = ["angry", "disgust", "fearful", "happy", "neutral", "sad", "surprised"]
+# Cam xuc cang thang / drama cang tot cho anh bia bai viet
+EMOTION_DRAMA = {
+    "angry": 1.00, "fearful": 1.00, "sad": 0.92, "surprised": 0.82,
+    "disgust": 0.68, "happy": 0.55, "neutral": 0.12,
+}
+FACE_ALIGN_STD = np.array(
+    [[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 71.7366],
+     [41.5493, 92.3655], [70.7299, 92.2041]], dtype=np.float64)
+
+_FACE_TLS = threading.local()
+_FACE_LOCK = threading.Lock()
+_FACE_FAILED = [False, False]        # [detector, emotion]
+_FACE_NOTICE = [False, False]
+
+
+def _face_log(msg):
     try:
-        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        cascade = cv2.CascadeClassifier(cascade_path)
-        if cascade.empty():
-            return None
-        return cascade
+        print(f"[FACE] {msg}")
     except Exception:
+        pass
+
+
+def _model_cache_dir():
+    d = Path.home() / ".video_story_publisher_models"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return d
+
+
+def _download_model(urls, dest, min_bytes):
+    """Tai model ve cache. True neu file da co san hoac tai xong."""
+    try:
+        if dest.exists() and dest.stat().st_size >= min_bytes:
+            return True
+    except Exception:
+        pass
+    import urllib.request
+    for url in urls:
+        tmp = dest.with_name(dest.name + ".part")
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=90) as resp, open(tmp, "wb") as fh:
+                while True:
+                    chunk = resp.read(262144)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+            if tmp.stat().st_size >= min_bytes:
+                tmp.replace(dest)
+                return True
+        except Exception:
+            pass
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+    return False
+
+
+def _get_face_detector():
+    """YuNet. Moi thread giu 1 instance (buoc quet khung chay da luong)."""
+    det = getattr(_FACE_TLS, "det", None)
+    if det is not None:
+        return det
+    if _FACE_FAILED[0]:
         return None
+    with _FACE_LOCK:
+        det = getattr(_FACE_TLS, "det", None)
+        if det is not None:
+            return det
+        if _FACE_FAILED[0]:
+            return None
+        path = _model_cache_dir() / FACE_MODEL_FILE
+        if not _download_model(FACE_MODEL_URLS, path, FACE_MIN_BYTES):
+            _FACE_FAILED[0] = True
+            if not _FACE_NOTICE[0]:
+                _FACE_NOTICE[0] = True
+                _face_log("Khong tai duoc model khuon mat -> tam dung do net + do sang.")
+            return None
+        try:
+            det = cv2.FaceDetectorYN.create(str(path), "", (480, 480), 0.55, 0.3, 5000)
+        except Exception as exc:
+            _FACE_FAILED[0] = True
+            if not _FACE_NOTICE[0]:
+                _FACE_NOTICE[0] = True
+                _face_log(f"Khong khoi tao duoc YuNet ({exc}) -> tam dung do net.")
+            return None
+        _FACE_TLS.det = det
+        return det
 
 
-FACE_CASCADE = _load_face_cascade()
+def _get_emotion_net():
+    net = getattr(_FACE_TLS, "emo", None)
+    if net is not None:
+        return net
+    if _FACE_FAILED[1]:
+        return None
+    with _FACE_LOCK:
+        net = getattr(_FACE_TLS, "emo", None)
+        if net is not None:
+            return net
+        if _FACE_FAILED[1]:
+            return None
+        path = _model_cache_dir() / EMOTION_MODEL_FILE
+        if not _download_model(EMOTION_MODEL_URLS, path, EMOTION_MIN_BYTES):
+            _FACE_FAILED[1] = True
+            if not _FACE_NOTICE[1]:
+                _FACE_NOTICE[1] = True
+                _face_log("Khong tai duoc model cam xuc -> bo qua phan cam xuc/drama.")
+            return None
+        try:
+            net = cv2.dnn.readNet(str(path))
+        except Exception:
+            _FACE_FAILED[1] = True
+            return None
+        _FACE_TLS.emo = net
+        return net
 
+
+def _align_face(frame, landmarks):
+    """Can chinh mat theo 5 diem moc ve khung chuan 112x112."""
+    try:
+        src = np.asarray(landmarks, dtype=np.float64).reshape(5, 2)
+        matrix, _ = cv2.estimateAffinePartial2D(src, FACE_ALIGN_STD, method=cv2.LMEDS)
+        if matrix is not None:
+            return cv2.warpAffine(frame, matrix, (112, 112))
+    except Exception:
+        pass
+    return None
+
+
+def _emotion_of(frame, face_row):
+    """-> (nhan cam xuc, do tin cay, diem drama 0..1)."""
+    net = _get_emotion_net()
+    if net is None:
+        return "", 0.0, 0.0
+    try:
+        face = _align_face(frame, face_row[4:14])
+        if face is None:
+            x, y, fw, fh = [int(v) for v in face_row[:4]]
+            x, y = max(0, x), max(0, y)
+            fw = max(1, min(fw, frame.shape[1] - x))
+            fh = max(1, min(fh, frame.shape[0] - y))
+            face = cv2.resize(frame[y:y + fh, x:x + fw], (112, 112))
+        face = cv2.cvtColor(face, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        face = (face - 0.5) / 0.5
+        net.setInput(cv2.dnn.blobFromImage(face), "data")
+        logits = np.asarray(net.forward()).ravel()
+        if logits.size != len(EMOTION_LABELS):
+            return "", 0.0, 0.0
+        exp = np.exp(logits - logits.max())
+        prob = exp / exp.sum()
+        idx = int(np.argmax(prob))
+        label = EMOTION_LABELS[idx]
+        return label, float(prob[idx]), float(EMOTION_DRAMA.get(label, 0.0))
+    except Exception:
+        return "", 0.0, 0.0
+
+
+def analyze_frame_faces(frame, max_width: int = 480, with_emotion: bool = True) -> dict:
+    """Phat hien khuon mat (+cam xuc) tren 1 khung BGR. Toa do theo khung GOC."""
+    result = {"faces": 0, "face_area_ratio": 0.0, "center_bonus": 0.0,
+              "emotion": "", "emotion_conf": 0.0, "drama": 0.0, "boxes": []}
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return result
+    det = _get_face_detector()
+    if det is None:
+        return result
+    h, w = frame.shape[:2]
+    if h <= 0 or w <= 0:
+        return result
+    scale = min(1.0, float(max_width) / float(w))
+    small = frame
+    if scale < 1.0:
+        small = cv2.resize(frame, (max(1, int(w * scale)), max(1, int(h * scale))),
+                           interpolation=cv2.INTER_AREA)
+    try:
+        det.setInputSize((small.shape[1], small.shape[0]))
+        _, rows = det.detect(small)
+    except Exception:
+        return result
+    if rows is None or len(rows) == 0:
+        return result
+
+    inv = 1.0 / scale
+    boxes = []
+    for row in rows:
+        boxes.append({
+            "x": float(row[0]) * inv, "y": float(row[1]) * inv,
+            "w": float(row[2]) * inv, "h": float(row[3]) * inv,
+            "conf": float(row[-1]),
+            "landmarks": [(float(row[4 + i * 2]) * inv, float(row[5 + i * 2]) * inv)
+                          for i in range(5)],
+        })
+    boxes.sort(key=lambda b: b["w"] * b["h"], reverse=True)
+    main = boxes[0]
+    result["faces"] = len(boxes)
+    result["boxes"] = boxes
+    result["face_area_ratio"] = min(1.0, (main["w"] * main["h"]) / float(w * h))
+    cx = main["x"] + main["w"] / 2.0
+    cy = main["y"] + main["h"] / 2.0
+    dx = abs(cx - w / 2.0) / (w / 2.0)
+    dy = abs(cy - h / 2.0) / (h / 2.0)
+    result["center_bonus"] = max(0.0, 1.0 - (dx * 0.65 + dy * 0.35))
+
+    if with_emotion:
+        # Cham cam xuc tren mat TO NHAT (nhan vat chinh cua khung hinh)
+        row = max(rows, key=lambda r: float(r[2]) * float(r[3]))
+        label, conf, drama = _emotion_of(frame, row)
+        result["emotion"], result["emotion_conf"], result["drama"] = label, conf, drama
+        if len(boxes) > 1:
+            # Nhieu nguoi trong khung = them kich tinh (doi dau, tranh cai...)
+            result["drama"] = min(1.0, result["drama"] + 0.10)
+    return result
+
+
+# --- Trong so cham diem anh bia (thu tu uu tien: NGUOI > NET > CAM XUC) ------
+# Diem khung CO MAT luon >= FACE_GATE; khung KHONG MAT toi da ~= NO_FACE_MAX.
+# NO_FACE_MAX = SHARP_WEIGHT + EXPOSURE_WEIGHT = 3300 + 130 = 3430 < FACE_GATE.
+FACE_GATE = 3600.0
+SHARP_WEIGHT = 3300.0
+EXPOSURE_WEIGHT = 130.0
+DRAMA_WEIGHT = 320.0
+
+
+def _sharpness_term(sharpness: float) -> float:
+    """Do net -> diem. Thang log cho gian ro dai do net cua video thuc (5..500)."""
+    import math
+    s = max(0.0, float(sharpness))
+    term = (math.log1p(min(s, 1500.0)) / math.log1p(1500.0)) * SHARP_WEIGHT
+    if s < 25.0:
+        term *= 0.40          # gan nhu nhoe / chuyen canh
+    elif s < 60.0:
+        term *= 0.80
+    return term
 
 def image_quality_metrics_from_frame(frame) -> dict:
+    """Diem 1 khung hinh theo thu tu uu tien: CO NGUOI > DO NET > CAM XUC/DRAMA."""
+    blank = {"score": 0.0, "sharpness": 0.0, "brightness": 0.0, "faces": 0,
+             "face_area_ratio": 0.0, "emotion": "", "emotion_conf": 0.0,
+             "drama": 0.0, "boxes": []}
     if frame is None:
-        return {"score": 0.0, "sharpness": 0.0, "brightness": 0.0, "faces": 0, "face_area_ratio": 0.0}
+        return dict(blank)
 
     h, w = frame.shape[:2]
     if h <= 0 or w <= 0:
-        return {"score": 0.0, "sharpness": 0.0, "brightness": 0.0, "faces": 0, "face_area_ratio": 0.0}
+        return dict(blank)
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
@@ -1003,47 +1258,37 @@ def image_quality_metrics_from_frame(frame) -> dict:
     if brightness < 35 or brightness > 225:
         exposure_score *= 0.25
 
-    faces = []
-    if FACE_CASCADE is not None:
-        try:
-            scale = min(1.0, 720.0 / max(w, h))
-            detect_img = gray if scale >= 1.0 else cv2.resize(gray, (max(1, int(w*scale)), max(1, int(h*scale))))
-            detected = FACE_CASCADE.detectMultiScale(
-                detect_img, scaleFactor=1.12, minNeighbors=5, minSize=(36, 36)
-            )
-            inv = 1.0 / scale
-            faces = [(int(x*inv), int(y*inv), int(fw*inv), int(fh*inv)) for x, y, fw, fh in detected]
-        except Exception:
-            faces = []
+    info = analyze_frame_faces(frame)
+    faces = int(info["faces"])
+    face_area_ratio = float(info["face_area_ratio"])
+    center_bonus = float(info["center_bonus"])
+    drama = float(info["drama"])
 
-    face_area_ratio = 0.0
-    center_bonus = 0.0
+    score = _sharpness_term(sharpness) + exposure_score * EXPOSURE_WEIGHT
+
     if faces:
-        x, y, fw, fh = max(faces, key=lambda r: r[2] * r[3])
-        face_area_ratio = min(1.0, (fw * fh) / float(w * h))
-        cx = x + fw / 2.0
-        cy = y + fh / 2.0
-        dx = abs(cx - w / 2.0) / (w / 2.0)
-        dy = abs(cy - h / 2.0) / (h / 2.0)
-        center_bonus = max(0.0, 1.0 - (dx * 0.65 + dy * 0.35))
-
-    sharp_component = min(sharpness, 1800.0)
-    face_bonus = 0.0
-    if faces:
-        face_bonus = 380.0 + min(520.0, face_area_ratio * 2600.0) + center_bonus * 180.0
-
-    score = sharp_component * 0.78 + exposure_score * 180.0 + face_bonus
-    if sharpness < 55:
-        score *= 0.30
-    elif sharpness < 100:
-        score *= 0.60
+        # Uu tien so 1: anh PHAI co nguoi / nhan vat.
+        # Cong theo kieu "cong don" (khong bi phep phat do net nhan vao),
+        # nho vay khung co mat luon thang khung vang nguoi.
+        score += FACE_GATE
+        # Mat cang to cang de nhan ra nhan vat.
+        score += min(500.0, face_area_ratio * 2600.0)
+        # Nhan vat o giua khung.
+        score += center_bonus * 160.0
+        # Cam xuc cang / drama cang tot.
+        score += drama * DRAMA_WEIGHT
+        score += min(1.0, float(info["emotion_conf"])) * 40.0
 
     return {
         "score": float(score),
         "sharpness": sharpness,
         "brightness": brightness,
-        "faces": len(faces),
-        "face_area_ratio": float(face_area_ratio),
+        "faces": faces,
+        "face_area_ratio": face_area_ratio,
+        "emotion": info["emotion"],
+        "emotion_conf": float(info["emotion_conf"]),
+        "drama": drama,
+        "boxes": info["boxes"],
     }
 
 
@@ -1124,6 +1369,8 @@ def extract_frames(video: Path, out_dir: Path, count: int, prefix: str) -> List[
             "sharpness": float(metrics["sharpness"] if metrics else 0.0),
             "faces": int(metrics["faces"] if metrics else 0),
             "face_area_ratio": float(metrics["face_area_ratio"] if metrics else 0.0),
+            "emotion": (metrics.get("emotion", "") if metrics else ""),
+            "drama": float(metrics.get("drama", 0.0) if metrics else 0.0),
         })
     return frames
 
@@ -1342,25 +1589,24 @@ def make_social_thumbnail(src_path: Path, out_path: Path, width: int = 290, heig
     with Image.open(src_path) as source:
         img = source.convert("RGB")
     cx, cy = img.width / 2, img.height / 2
-    if FACE_CASCADE is not None:
-        try:
-            gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
-            scale = min(1.0, 640.0 / max(img.size))
-            small = cv2.resize(gray, (max(1, round(img.width * scale)),
-                                      max(1, round(img.height * scale))))
-            faces = FACE_CASCADE.detectMultiScale(small, scaleFactor=1.1,
-                                                  minNeighbors=5, minSize=(24, 24))
-            if len(faces):
-                x, y, w, h = max(faces, key=lambda box: int(box[2]) * int(box[3]))
-                cx, cy = (x + w / 2) / scale, (y + h / 2) / scale
-        except Exception:
-            pass
+    head_ratio = 0.5
+    try:
+        rgb = np.array(img)
+        info = analyze_frame_faces(rgb[:, :, ::-1], max_width=640, with_emotion=False)
+        if info.get("boxes"):
+            box = info["boxes"][0]
+            cx = box["x"] + box["w"] / 2.0
+            cy = box["y"] + box["h"] / 2.0
+            # Mat nam ~45% tu tren xuong -> chua duoc dinh dau, khong cat tran.
+            head_ratio = 0.45
+    except Exception:
+        pass
     lanczos = getattr(Image, "Resampling", Image).LANCZOS
     ratio = size / min(img.size)
     resized = img.resize((max(size, round(img.width * ratio)),
                           max(size, round(img.height * ratio))), lanczos)
     left = max(0, min(resized.width - size, round(cx * ratio - size / 2)))
-    top = max(0, min(resized.height - size, round(cy * ratio - size / 2)))
+    top = max(0, min(resized.height - size, round(cy * ratio - size * head_ratio)))
     result = resized.crop((left, top, left + size, top + size))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     result.save(out_path, "JPEG", quality=92, optimize=True)
@@ -1368,9 +1614,7 @@ def make_social_thumbnail(src_path: Path, out_path: Path, width: int = 290, heig
 
 
 def find_person_thumbnail_frame(videos: List[Path], timeline: List[Dict], out_path: Path) -> Optional[Dict]:
-    """Search additional evenly spaced moments when the normal frame scan found no face."""
-    if FACE_CASCADE is None:
-        return None
+    """Quet them cac moc deu nhau de tim khung CO NGUOI + net + nhieu cam xuc nhat."""
     best_frame, best_metrics, best_video, best_second = None, None, None, 0.0
     for video, entry in zip(videos, timeline):
         duration = float(entry.get("duration", 0) or 0)
@@ -1388,10 +1632,6 @@ def find_person_thumbnail_frame(videos: List[Path], timeline: List[Dict], out_pa
                 ok, frame = cap.read()
                 if not ok or frame is None:
                     continue
-                h, w = frame.shape[:2]
-                if max(h, w) > 960:
-                    ratio = 960 / max(h, w)
-                    frame = cv2.resize(frame, (round(w * ratio), round(h * ratio)))
                 metrics = image_quality_metrics_from_frame(frame)
                 if metrics["faces"] and (best_metrics is None or metrics["score"] > best_metrics["score"]):
                     best_frame, best_metrics, best_video, best_second = frame.copy(), metrics, video, second
@@ -1400,7 +1640,8 @@ def find_person_thumbnail_frame(videos: List[Path], timeline: List[Dict], out_pa
     if best_frame is None or not cv2_imwrite_unicode(out_path, best_frame, quality=95):
         return None
     return {"path": str(out_path), "video": best_video.name, "second": best_second,
-            "quality": best_metrics["score"], "faces": best_metrics["faces"]}
+            "quality": best_metrics["score"], "faces": best_metrics["faces"],
+            "emotion": best_metrics.get("emotion", ""), "drama": best_metrics.get("drama", 0.0)}
 
 
 def make_story_cover(src_path: Path, out_path: Path) -> Path:
@@ -2710,11 +2951,10 @@ Return STRICT JSON only:
             if not ok or frame is None:
                 continue
             metrics = image_quality_metrics_from_frame(frame)
+            # Diem da uu tien co nguoi > do net > cam xuc; KHONG nhan
+            # them he so phat do net vi se de khung mo co mat thua khung net.
             score = float(metrics.get("score", 0) or 0)
-            if float(metrics.get("sharpness", 0) or 0) < 70:
-                score *= 0.35
-            if int(metrics.get("faces", 0) or 0) > 0:
-                score += 250.0
+            score += float(metrics.get("drama", 0) or 0) * 150.0
             metrics = dict(metrics)
             metrics["final_score"] = score
             if best is None or score > best_metrics["final_score"]:
@@ -2755,6 +2995,12 @@ Return STRICT JSON only:
         if not self.frames:
             self._log("WARNING: Không có khung hình dùng được để tạo ảnh bìa.")
             return story
+
+        def thumb_score(f):
+            # Điểm "có người" đã nằm trong quality; cộng thêm cảm xúc/drama
+            # để giữa các khung cùng có mặt thì khung nhiều drama được ưu tiên.
+            return float(f.get("quality", 0) or 0) + float(f.get("drama", 0) or 0) * 250.0
+
         # Prefer a detected person anywhere in the video, including opening/ending frames.
         people = [f for f in self.frames if int(f.get("faces", 0) or 0) > 0]
         if not people and self.source_videos:
@@ -2772,19 +3018,25 @@ Return STRICT JSON only:
         pool = people or middle or self.frames
         if not people:
             self._log("WARNING: Không phát hiện khuôn mặt trong các khung đã lấy; dùng khung rõ nhất.")
-        thumb = max(pool, key=lambda f: float(f.get("quality", 0) or 0))
+        thumb = max(pool, key=thumb_score)
         original_thumb = Path(thumb["path"])
         story["thumbnail_original_local"] = str(original_thumb)
         cover_path = make_social_thumbnail(original_thumb, self.work_dir / "thumbnail_website_290x290.jpg")
         story["thumbnail_local"] = str(cover_path)
         story["thumbnail_size"] = "290x290"
-        self._log("Website thumbnail: 290x290px | ưu tiên có người, cắt vuông theo khuôn mặt")
+        emotion = (thumb.get("emotion") or "").strip()
+        sharp = float(thumb.get("sharpness", 0) or 0)
+        self._log("Ảnh bìa website: 290x290px | ưu tiên CÓ NGƯỜI + nét + cảm xúc"
+                  + (f" | cảm xúc: {emotion}" if emotion else "")
+                  + f" | nét: {sharp:.0f}")
+        if people and sharp and sharp < 25:
+            self._log("LƯU Ý: khung có người nét thấp (video rung/mờ); nên kiểm tra lại ảnh bìa.")
 
         if bool(self.cfg.get("facebook_thumbnail_mode", True)):
             social_thumb = self.work_dir / "thumbnail_facebook_290x290.jpg"
             make_social_thumbnail(original_thumb, social_thumb)
             story["facebook_thumbnail_local"] = str(social_thumb)
-            self._log("Facebook thumbnail: 290x290px | cắt vuông theo khuôn mặt")
+            self._log("Ảnh bìa Facebook: 290x290px | cắt vuông theo khuôn mặt")
         return story
 
     def upload_cloudinary(self, story: dict) -> dict:
