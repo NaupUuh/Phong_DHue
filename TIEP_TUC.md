@@ -133,3 +133,24 @@ cd /c/Users/Admin/Desktop/Phong_DHue
   DUNG: sh.Run """" & bat & """", 0, False
 - DA TEST: cscript //nologo -> exit 0, goi dung .bat (tao marker). Da push GitHub.
 - Neu gap lai loi nay o may khac: chay updater.py hoac chep de Mo_An.vbs ban moi.
+
+
+## 2026-10-07 (moi) - Port fix dang bai tu ADung sang DHue (v23.6.16)
+- DHue truoc chi co fix Mo_An.vbs; phan dang bai van la ban CU (chi nhat 401/403,
+  khong chia nho request, khong chong dang trung).
+- Da port 7 thay doi tu ADung:
+  1. adsconex_split_chunks()          - chia content theo moc '<p>CHAPTER N - ...</p>'
+  2. _adsconex_payload_slug()         - lay slug tu permalink
+  3. _adsconex_headers(cfg)           - header Chrome dung chung
+  4. adsconex_series_id_for_slug()    - lay series_id de gop cac phan vao 1 series
+  5. adsconex_existing_slugs()        - GET /series -> tranh dang trung
+  6. StoryPipeline._adsconex_send_all - gui nhieu phan, phan 2+ kem series_id,
+     phan loi -> tra payload GOC de luu lai dang lai
+  7. find_pending_adsconex(output_root, cfg) - nhat ca 502/503/504/429/network
+- publish_adsconex + republish_pending: doi self._adsconex_send -> _adsconex_send_all
+- 2 cho goi find_pending_adsconex: truyen them cfg
+- Sua them: nut 'Lay link site' (https://https://) va NameError lambda _update_fail
+- DA TEST THAT (khong phai doc code): chia 3/6/12 chuong -> ghep lai KHOP content goc,
+  moi phan <=36000, phan 2+ co series_id; loi phan 3/6 -> tra payload goc;
+  find_pending nhat dung 502 cu + 403 cu, bo qua bai da dang/200/422/da-live.
+- Backup ban cu: _backup_old/viet_drama_V23.6_dashboard_thumbnail.py.v23.6.15.bak
