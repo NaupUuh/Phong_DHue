@@ -69,6 +69,58 @@ from typing import List, Dict, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # ---------------------------
+# Robust numeric parsing (so model tra ve co the dinh ky tu la)
+# ---------------------------
+_NUM_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
+
+def _clean_number_text(value):
+    """Chuan hoa chuoi so: fullwidth, NBSP, zero-width, dau gach Unicode."""
+    if isinstance(value, str):
+        import unicodedata
+        value = unicodedata.normalize("NFKC", value)
+        value = value.replace(" ", " ").replace(" ", " ")
+        for _zw in ("​", "‌", "‍", "﻿"):
+            value = value.replace(_zw, "")
+        value = value.replace("−", "-")
+    return value
+
+def safe_float(value, default=0.0):
+    """float() KHONG BAO GIO crash. Dung cho moi so den tu model."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        pass
+    cleaned = _clean_number_text(value)
+    try:
+        return float(cleaned)
+    except (TypeError, ValueError):
+        pass
+    if isinstance(cleaned, str):
+        probe = cleaned
+        if "," in probe and "." not in probe:
+            probe = probe.replace(",", ".")
+        m = _NUM_RE.search(probe)
+        if m:
+            try:
+                return float(m.group(0))
+            except ValueError:
+                pass
+    try:
+        return float(default)
+    except (TypeError, ValueError):
+        return default
+
+def safe_int(value, default=0):
+    """int() KHONG BAO GIO crash (ke ca '3.0' hay so fullwidth)."""
+    f = safe_float(value, None)
+    if f is None:
+        try:
+            return int(default)
+        except (TypeError, ValueError):
+            return 0
+    return int(f)
+
+# ---------------------------
 # Auto-install Python packages
 # ---------------------------
 REQUIRED = {
@@ -227,7 +279,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.7"
+APP_VERSION = "23.6.8"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -674,7 +726,7 @@ def build_adsconex_chapter_content(story: dict) -> str:
     if intro:
         parts.append(f"<p>{html_escape(intro)}</p>")
     for idx, ch in enumerate(chapters):
-        n = ch.get("number", idx + 1)
+        n = safe_int(ch.get("number"), idx + 1)
         raw_title = str(ch.get("title") or "").strip()
         raw_title = re.sub(rf"^chapter\s*{n}\s*[-:–—]*\s*", "", raw_title, flags=re.I).strip()
         if not raw_title:
@@ -1714,8 +1766,8 @@ def transcript_slice_for_time(transcript: str, start_second: float, end_second: 
     Select transcript lines whose global timestamp falls around a chapter's time window.
     Expected prefix format: [000123.45s] ...
     """
-    lo = max(0.0, float(start_second) - padding)
-    hi = float(end_second) + padding
+    lo = max(0.0, safe_float(start_second, 0.0) - padding)
+    hi = safe_float(end_second, 0.0) + padding
     out = []
     for line in (transcript or "").splitlines():
         m = re.match(r"\[(\d+(?:\.\d+)?)s\]", line)
@@ -2245,11 +2297,17 @@ Do not invent unsupported events. Keep chronology. Use neutral role labels if na
                 batch_events = [batch_events] if batch_events else []
             for item in batch_events:
                 if isinstance(item, dict):
-                    events.append(item)
+                    # Model co the tra so dang chuoi (vd dau cham fullwidth U+FF0E)
+                    # -> chuan hoa ngay tai day, khong de so ban di tiep vao prompt.
+                    _ev = dict(item)
+                    for _k in ("start_second", "end_second", "start", "end"):
+                        if _k in _ev:
+                            _ev[_k] = safe_float(_ev.get(_k), 0.0)
+                    events.append(_ev)
                 elif item:
                     events.append({
-                        "start_second": float(batch.get("time_start", 0) or 0),
-                        "end_second": float(batch.get("time_end", 0) or 0),
+                        "start_second": safe_float(batch.get("time_start"), 0.0),
+                        "end_second": safe_float(batch.get("time_end"), 0.0),
                         "description": str(item),
                     })
         analysis = {
@@ -2276,7 +2334,7 @@ Do not invent unsupported events. Keep chronology. Use neutral role labels if na
         events = [event for event in analysis.get("events", []) if isinstance(event, dict)]
         def event_second(event):
             try:
-                return float(event.get("start_second", 0) or 0)
+                return safe_float(event.get("start_second"), 0.0)
             except (TypeError, ValueError):
                 return 0.0
         if events:
@@ -2357,15 +2415,15 @@ Do not invent unsupported events. Keep chronology. Use neutral role labels if na
     def _chapter_source_payload(self, analysis: dict, transcript: str, plan: List[Dict]) -> List[Dict]:
         chapter_sources = []
         for idx, ch in enumerate(plan, 1):
-            start_s = float(ch.get("start_second", 0) or 0)
-            end_s = float(ch.get("end_second", start_s + 1) or (start_s + 1))
+            start_s = safe_float(ch.get("start_second"), 0.0)
+            end_s = safe_float(ch.get("end_second") or (start_s + 1), start_s + 1)
             excerpt = transcript_slice_for_time(transcript, start_s, end_s, padding=45.0)
             if len(excerpt) > 10000:
                 lines = excerpt.splitlines()
                 step = max(1, len(lines) // 320)
                 excerpt = "\n".join(lines[::step][:320])
             chapter_sources.append({
-                "number": int(ch.get("number", idx) or idx),
+                "number": safe_int(ch.get("number"), idx),
                 "title": str(ch.get("title") or ""),
                 "start_second": start_s,
                 "end_second": end_s,
@@ -2376,7 +2434,7 @@ Do not invent unsupported events. Keep chronology. Use neutral role labels if na
         return chapter_sources
 
     def _write_chapter_batch(self, analysis: dict, batch: List[Dict], prior_chapters=None) -> List[Dict]:
-        nums = [int(x["number"]) for x in batch]
+        nums = [safe_int(x.get("number"), 0) for x in batch]
         global_context = {
             "working_title": analysis.get("working_title", ""),
             "characters": analysis.get("characters", []),
@@ -2451,7 +2509,7 @@ JSON SCHEMA:
         return [x for x in chapters if isinstance(x, dict)]
 
     def _write_one_chapter(self, analysis: dict, source: Dict, continuity: str = "") -> Dict:
-        n = int(source.get("number", 0) or 0)
+        n = safe_int(source.get("number"), 0)
         prompt = f"""
 Write ONLY Chapter {n} of a serialized story.
 
@@ -2484,7 +2542,7 @@ REQUIREMENTS:
   must appear in the chapters exactly as the script states. Do not invent new
   names, do not contradict the script, and do not change the genre / era / outcome.
 - Return STRICT JSON only:
-{{"chapter": {{"number": {n}, "title": "...", "start_second": {float(source.get('start_second',0) or 0)}, "end_second": {float(source.get('end_second',0) or 0)}, "body": "..."}}}}
+{{"chapter": {{"number": {n}, "title": "...", "start_second": {safe_float(source.get('start_second'), 0.0)}, "end_second": {safe_float(source.get('end_second'), 0.0)}, "body": "..."}}}}
 """.strip()
         obj = self._writer_json_call(
             f"Writer emergency Chapter {n}",
@@ -2499,8 +2557,9 @@ REQUIREMENTS:
         if not isinstance(ch, dict) or not str(ch.get("body") or "").strip():
             raise RuntimeError(f"Chapter {n}: API returned no usable chapter")
         ch["number"] = n
-        ch.setdefault("start_second", source.get("start_second", 0))
-        ch.setdefault("end_second", source.get("end_second", 0))
+        # Giu nguyen ngu nghia setdefault, nhung chuan hoa so (model co the tra chuoi).
+        ch["start_second"] = safe_float(ch.get("start_second", source.get("start_second", 0)), 0.0)
+        ch["end_second"] = safe_float(ch.get("end_second", source.get("end_second", 0)), 0.0)
         return ch
 
     def _story_metadata(self, analysis: dict, chapter_titles: List[str]) -> dict:
@@ -2699,7 +2758,7 @@ Return STRICT JSON only:
             max_end = 0.0
             for e in events:
                 try:
-                    max_end = max(max_end, float(e.get("end_second", 0) or 0))
+                    max_end = max(max_end, safe_float(e.get("end_second"), 0.0))
                 except Exception:
                     pass
             if max_end <= 0:
@@ -2768,7 +2827,7 @@ Return STRICT JSON only:
                 return
             for ch in result:
                 try:
-                    n = int(ch.get("number", 0) or 0)
+                    n = safe_int(ch.get("number"), 0)
                 except Exception:
                     continue
                 if n in nums and str(ch.get("body") or "").strip():
@@ -2855,8 +2914,8 @@ Return STRICT JSON only:
         for i, ch in enumerate(chapters, 1):
             src = chapter_sources[i - 1]
             ch["number"] = i
-            ch["start_second"] = float(src.get("start_second", 0) or 0)
-            ch["end_second"] = float(src.get("end_second", 0) or 0)
+            ch["start_second"] = safe_float(src.get("start_second"), 0.0)
+            ch["end_second"] = safe_float(src.get("end_second"), 0.0)
             ch["title"] = clean_title(str(ch.get("title") or ""), i, str(ch.get("body") or ""))
             body = str(ch.get("body") or "").strip()
             # Chapter headings and page breaks are inserted by the tool only.
@@ -2917,8 +2976,8 @@ Return STRICT JSON only:
         if not self.source_videos or not self.video_timeline:
             return None
 
-        s = float(chapter.get("start_second", 0) or 0)
-        e = float(chapter.get("end_second", s + 0.5) or (s + 0.5))
+        s = safe_float(chapter.get("start_second"), 0.0)
+        e = safe_float(chapter.get("end_second") or (s + 0.5), s + 0.5)
         mid = (s + e) / 2.0
 
         video = None
@@ -3192,7 +3251,7 @@ Return STRICT JSON only:
             # Put the page-break immediately BEFORE Chapter 2, 3, 4...
             if idx > 0:
                 parts.append(marker)
-            n = ch.get("number", idx+1)
+            n = safe_int(ch.get("number"), idx + 1)
             raw_title = str(ch.get("title") or "").strip()
             raw_title = re.sub(rf"^chapter\s*{n}\s*[-:–—]*\s*", "", raw_title, flags=re.I).strip()
             if not raw_title:

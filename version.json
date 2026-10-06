@@ -1,5 +1,5 @@
 {
-  "version": "23.6.7",
-  "notes": "Anh bia: thay Haar cascade (OpenCV 5.x da xoa han -> FACE_CASCADE=None khien tool mu mat, anh bia hay ra canh khong nguoi) bang YuNet + model cam xuc. Uu tien anh CO NGUOI > net nhat > drama/cam xuc cao. Cat vuong 290x290 theo khuon mat, khong cat tran. Model tu tai ve ~/.video_story_publisher_models, co offline fallback.",
+  "version": "23.6.8",
+  "notes": "Fix crash 'could not convert string to float: 11.11': model tra so kem ky tu Unicode (dau cham fullwidth U+FF0E) -> them safe_float/safe_int chuan hoa NFKC + regex, ap cho moi field so tu model (time_start/end, start/end_second, number)",
   "date": "2026-10-06"
 }
