@@ -1,5 +1,5 @@
 {
-  "version": "23.6.16",
-  "notes": "Fix 502 Adsconex: chia nho request >36KB thanh nhieu POST kem series_id (khong tach series, chuong giu dung thu tu); nut 'Dang lai bai loi' nhat ca bai 502/503/504/429/network (truoc chi 401/403 nen bo sot); chong dang trung bang doi chieu slug voi GET /series; sua https://https:// o nut 'Lay link site'; sua NameError khi cap nhat that bai.",
+  "version": "23.6.17",
+  "notes": "Fix tool TREO khi dang bai: tran toc do dung chung tren o Z dung mtime cua mark de tinh gian cach -> khi 2 may lech dong ho (do that: lech 45s) mtime nam o TUONG LAI lam since_last am -> vong xin luot lap vo han. Nay: (1) gian cach tinh theo dong ho CUA CHINH MAY, (2) bo qua mark co mtime o tuong lai khi dem cua so, (3) gioi han cho luot toi da 25s roi gian cach tai may thay vi treo vo han.",
   "date": "2026-10-07"
 }

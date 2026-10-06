@@ -279,7 +279,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.16"
+APP_VERSION = "23.6.17"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -765,6 +765,8 @@ ADSCONEX_RATE_WINDOW = 60.0             # cua so dem luot dang (giay)
 ADSCONEX_RATE_KEEP = 180.0              # xoa dau cu hon muc nay (giay)
 ADSCONEX_RATE_LOCK_STALE = 30.0         # khoa cu hon -> may do da crash, pha duoc
 ADSCONEX_RATE_LOCK_WAIT_MAX = 120.0     # cho khoa qua lau -> coi nhu o Z loi
+ADSCONEX_RATE_SLOT_WAIT_MAX = 25.0      # cho luot dang qua lau -> gian cach tai may
+ADSCONEX_RATE_CLOCK_SKEW_MAX = 90.0     # mtime vuot muc nay = dong ho sai han -> rac
 ADSCONEX_RATE_MIN_GAP_SAFETY = 0.5     # bien an toan cho gian cach toi thieu (giay)
 _adsconex_local_lock = threading.Lock()
 _adsconex_local_last_post = [0.0]
@@ -851,6 +853,15 @@ def _adsconex_claim_slot(cfg):
                     mtime = os.path.getmtime(mark_path)
                 except OSError:
                     continue
+                # Lech dong ho giua cac may: mtime co the nam o TUONG LAI. Dung nguyen
+                # gia tri do thi `since_last` am -> wait_s luon lon -> vong xin luot lap
+                # vo han, tool TREO khong bao gio dang duoc (da sap that: 2 may lech ~45s).
+                # Kep mtime ve hien tai; dau lech qua xa = dong ho sai han -> coi la rac.
+                if mtime > now:
+                    # mtime o TUONG LAI = dong ho may ghi mark di truoc may nay. Khong the
+                    # tinh gian cach tu no (since_last se am -> wait vo han), cung khong nen
+                    # keo ve `now` vi nhu vay mark cu se chan mai. Bo qua khi tinh cua so.
+                    continue
                 if now - mtime > ADSCONEX_RATE_KEEP:
                     try:
                         os.remove(mark_path)
@@ -861,9 +872,15 @@ def _adsconex_claim_slot(cfg):
                     inside.append(mtime)
             # Gian cach toi thieu giua 2 bai lien tiep. Neu chi dem theo cua so
             # 60s thi 6 bai dau se dong loat trong ~0.5s (da do that) -> origin bi
-            # soc -> 502, du khong vuot tran. Dung mtime cua dau MOI NHAT.
+            # soc -> 502, du khong vuot tran.
+            # Dung LAN DANG CUOI DO CHINH MAY NAY ghi (dong ho cua chinh minh) chu
+            # KHONG dung mtime cua mark: cac may co the lech dong ho nhau, mtime cua
+            # may khac khong so sanh duoc voi dong ho may nay (da sap that: lech ~45s
+            # lam since_last am -> wait vo han -> tool treo).
             min_gap = (ADSCONEX_RATE_WINDOW / per_min) + ADSCONEX_RATE_MIN_GAP_SAFETY
-            since_last = (now - max(inside)) if inside else None
+            with _adsconex_local_lock:
+                last_local = _adsconex_local_last_post[0]
+            since_last = (now - last_local) if last_local > 0 else None
             if since_last is not None and since_last < min_gap:
                 wait_s = max(0.2, min_gap - since_last + 0.05)
             elif len(inside) < per_min:
@@ -871,6 +888,8 @@ def _adsconex_claim_slot(cfg):
                     int(now * 1000), platform.node(), os.getpid()))
                 with open(mark_path, "w", encoding="utf-8") as fh:
                     fh.write("")
+                with _adsconex_local_lock:
+                    _adsconex_local_last_post[0] = time.time()
                 return ("shared", 0.0)
             else:
                 # Het luot: cho cho dau cu nhat ra khoi cua so roi thu lai.
@@ -890,11 +909,21 @@ def _adsconex_claim_slot(cfg):
 
 
 def _adsconex_take_shared_slot(cfg):
-    """Xin luot dang, cho den khi duoc phep. Tra (mode, so_giay)."""
+    """Xin luot dang, cho den khi duoc phep. Tra (mode, so_giay).
+
+    Co GIOI HAN tong thoi gian cho: khong xin duoc luot trong ADSCONEX_RATE_SLOT_WAIT_MAX
+    thi coi nhu tran dung chung dang bi ket (vd lech dong ho giua cac may lam mark nam o
+    tuong lai) -> tra 'fallback' de gian cach tai may thay vi treo vo han.
+    """
+    deadline = time.time() + ADSCONEX_RATE_SLOT_WAIT_MAX
     while True:
         mode, extra = _adsconex_claim_slot(cfg)
         if mode == "wait":
-            time.sleep(extra)
+            remain = deadline - time.time()
+            if remain <= 0:
+                _per_min, local_gap = _adsconex_rate_limits(cfg)
+                return ("fallback", local_gap)
+            time.sleep(min(max(0.2, extra), remain))
             continue
         return (mode, extra)
 
@@ -905,7 +934,7 @@ def _adsconex_wait_for_slot(cfg, log=None) -> str:
     mode, extra = _adsconex_take_shared_slot(cfg)
     if mode == "fallback":
         waited = _adsconex_local_wait(extra)
-        note = ("o Z khong dung duoc -> gian cach tai may %.0fs" % extra)
+        note = ("khong xin duoc luot chung -> gian cach tai may %.0fs" % extra)
         if waited > 0.5:
             note += " (cho %.0fs)" % waited
         return note
