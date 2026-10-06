@@ -154,3 +154,30 @@ cd /c/Users/Admin/Desktop/Phong_DHue
   moi phan <=36000, phan 2+ co series_id; loi phan 3/6 -> tra payload goc;
   find_pending nhat dung 502 cu + 403 cu, bo qua bai da dang/200/422/da-live.
 - Backup ban cu: _backup_old/viet_drama_V23.6_dashboard_thumbnail.py.v23.6.15.bak
+
+
+## 2026-10-07 - FIX TOOL TREO khi dang bai (LECH DONG HO) - v22.100.13 / v23.6.17
+Trieu chung: log dung ngay sau dong "Adscene phan 2/2 | 29139 ky tu", tool treo >7 phut
+khong bao loi. KHONG phai loi mang/origin.
+
+NGUYEN NHAN GOC: tran toc do dang dung chung tren o Z tinh gian cach bang mtime cua file
+mark. Hai may lech dong ho (do that: 45 giay) -> mtime cua mark do may kia ghi nam o
+TUONG LAI so voi dong ho may nay -> `since_last = now - max(inside)` AM -> wait_s luon lon
+-> `_adsconex_take_shared_slot` lap `while True` mai mai -> TREO vinh vien.
+Chung minh: goi thang `_adsconex_claim_slot` tren o Z that -> luon tra ("wait", ~50s).
+
+DA VA (3 lop):
+1. Gian cach tinh theo DONG HO CUA CHINH MAY (`_adsconex_local_last_post`), khong dung
+   mtime cua mark (khong so sanh duoc giua cac may).
+2. Bo qua mark co mtime o TUONG LAI khi dem cua so (khong keo ve now, khong xoa).
+3. `_adsconex_take_shared_slot` gioi han cho toi da 25s (ADSCONEX_RATE_SLOT_WAIT_MAX)
+   -> qua han thi tra "fallback" (gian cach tai may) thay vi treo vo han.
+
+DA TEST THAT tren o Z (khong phai doc code):
+- Truoc va: claim_slot luon ("wait", 40-55s), take_shared_slot treo vo han.
+- Sau va: xin duoc luot trong 0.2-13s; mo phong 8 mark toan bo o tuong lai +45s -> xin
+  luot trong 0.00s, khong treo.
+
+Luu y moi truong: dong ho may em (Ken-Physical-Server) tung CHAM 45s; da bat w32time
+(`sc config w32time start= auto` + `net start w32time` + `w32tm /resync`) -> lech +0.1s.
+NEN dong bo dong ho tren MOI may chay tool.
