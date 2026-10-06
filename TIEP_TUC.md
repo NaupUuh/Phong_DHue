@@ -3,7 +3,7 @@
 > Đọc file này trước khi sửa tool. Cập nhật lại mỗi khi rời tool.
 
 ## Trạng thái hiện tại (2026-10-06)
-- **Version đang chạy:** v23.6.8
+- **Version đang chạy:** v23.6.9
 - **Repo GitHub:** https://github.com/NaupUuh/Phong_DHue
 - **Thư mục máy:** `Phong_DHue`
 - **Cách chạy:** bấm đúp `CHAY_Phong_DHue.bat` (hoặc `viet_drama_V23.6_dashboard_thumbnail.py`)
@@ -19,6 +19,13 @@
 - **Ô "Câu chèn trong tên file"** trong tab Cài đặt: mỗi dòng 1 câu, tool chọn
   ngẫu nhiên 1 câu thay chuỗi `full story` khi đặt tên file. Để trống → quay về
   `full story` như bản cũ.
+- **Adsconex tu dong retry loi tam thoi (v23.6.9):** `publish_adsconex()` truoc day
+  POST 1 lan roi bao loi -> 502 Cloudflare `origin_bad_gateway` lam MAT luot dang
+  (do that 06/10: 35/124 bai bi 502 = 28%). Nay retry 502/503/504/429/520-524 +
+  backoff theo `Retry-After` (mac dinh 60s, toi da 3 luot, tran 300s/luot).
+  Cau hinh: `adsconex_retry_count` (3), `adsconex_retry_delay` (60) trong config.
+  **500 va 401 KHONG retry** (co the da tao bai / loi that -> tranh bai trung).
+  Log ro tung luot: `Adsconex HTTP 502 (loi tam thoi) | thu lai 2/3 sau 60s | ...`
 
 ## Tên file video (định dạng)
 ```
