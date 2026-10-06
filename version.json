@@ -1,5 +1,5 @@
 {
-  "version": "23.6.8",
-  "notes": "Fix crash 'could not convert string to float: 11.11': model tra so kem ky tu Unicode (dau cham fullwidth U+FF0E) -> them safe_float/safe_int chuan hoa NFKC + regex, ap cho moi field so tu model (time_start/end, start/end_second, number)",
+  "version": "23.6.9",
+  "notes": "Adsconex: tu dong retry loi tam thoi (Cloudflare 502 origin_bad_gateway / 503 / 504 / 429 / 520-524) + backoff theo Retry-After (mac dinh 60s, toi da 3 luot). Truoc day POST 1 lan roi bao loi -> mat luot dang (35/124 bai bi 502 ngay 06/10). 500 va 401 KHONG retry de tranh bai trung.",
   "date": "2026-10-06"
 }

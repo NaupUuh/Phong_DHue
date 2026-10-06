@@ -279,7 +279,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.8"
+APP_VERSION = "23.6.9"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -424,6 +424,8 @@ DEFAULT_CONFIG = {
     "adsconex_category": "15",
     "adsconex_author": "",
     "adsconex_apply_image_to_all": True,
+    "adsconex_retry_count": "3",
+    "adsconex_retry_delay": "60",
     "language": "English",
     "whisper_model": "small",
     "whisper_device": "cpu",
@@ -684,6 +686,60 @@ def published_article_link(result: dict, site_host: str) -> str:
                 break
     host = urlsplit("https://" + re.sub(r"^https?://", "", str(site_host).strip().strip("/"))).netloc
     return f"https://{host}/article/{article_id}" if host and article_id else ""
+
+def _adsconex_retry_after_seconds(response, default=60.0):
+    """Doc Retry-After (giay hoac HTTP-date) tu header, fallback tu body JSON Cloudflare."""
+    raw = ""
+    try:
+        raw = str(response.headers.get("Retry-After") or "").strip()
+    except Exception:
+        raw = ""
+    if not raw:
+        try:
+            body = response.json()
+            if isinstance(body, dict):
+                for key in ("retry_after", "retryAfter"):
+                    if body.get(key) not in (None, ""):
+                        raw = str(body.get(key)).strip()
+                        break
+        except Exception:
+            raw = ""
+    # Chi parse so khi chuoi THUC SU la so. Neu khong, "Wed, 21 Oct 2099 07:28:00 GMT"
+    # se bi safe_float doc thanh 21 (ngay trong thang) -> backoff sai.
+    seconds = None
+    if raw and re.fullmatch(r"\d+(?:\.\d+)?", raw.strip()):
+        seconds = safe_float(raw, None)
+    if seconds is None:
+        try:
+            from email.utils import parsedate_to_datetime
+            import datetime as _dt
+            when = parsedate_to_datetime(raw)
+            if when is not None:
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=_dt.timezone.utc)
+                seconds = (when - _dt.datetime.now(_dt.timezone.utc)).total_seconds()
+        except Exception:
+            seconds = None
+    if seconds is None:
+        seconds = safe_float(default, 60.0)
+    return max(0.0, min(600.0, float(seconds)))
+
+
+def _adsconex_is_transient(status_code, payload=None):
+    """True khi loi TAM THOI (Cloudflare origin 502/503/504/520-524, rate limit 429).
+
+    Loai tru 500: request co the da duoc origin xu ly mot phan, retry se tao bai trung.
+    """
+    try:
+        code = int(status_code)
+    except (TypeError, ValueError):
+        return False
+    if code in (429, 502, 503, 504, 520, 521, 522, 523, 524):
+        return True
+    if isinstance(payload, dict) and payload.get("retryable") is True:
+        return True
+    return False
+
 
 def published_adsconex_link(result: dict, site_host: str) -> str:
     """Link bai Adsconex/Blogbio dang /blog/<slug>. Lay tu response, khong doan."""
@@ -3444,10 +3500,45 @@ Return STRICT JSON only:
             f"thumbnail={'YES' if 'feature_image' in payload else 'NO'} | "
             f"category={payload.get('category', 'none')}"
         )
-        try:
-            r = requests.post(endpoint, headers=headers, json=payload, timeout=180)
-        except Exception as e:
-            raise RuntimeError(f"Adsconex network error: {e}")
+        # Retry loi TAM THOI (Cloudflare 502 origin_bad_gateway / 503 / 504 / 429)
+        # kem backoff theo Retry-After. 502 nghia la origin chua tao bai (da kiem chung
+        # tren site that), nen thu lai KHONG sinh bai trung.
+        max_attempts = max(1, min(6, safe_int(self.cfg.get("adsconex_retry_count", 3), 3)))
+        base_delay = max(5.0, safe_float(self.cfg.get("adsconex_retry_delay", 60), 60.0))
+        r = None
+        data = {}
+        for attempt in range(1, max_attempts + 1):
+            try:
+                r = requests.post(endpoint, headers=headers, json=payload, timeout=180)
+            except Exception as e:
+                if attempt >= max_attempts:
+                    raise RuntimeError(f"Adsconex network error sau {attempt} lan thu: {e}")
+                wait_s = min(base_delay * (2 ** (attempt - 1)), 300.0)
+                self._log(f"Adsconex network error ({e}) | thu lai {attempt + 1}/{max_attempts} sau {wait_s:.0f}s")
+                time.sleep(wait_s)
+                continue
+
+            try:
+                data = r.json()
+            except Exception:
+                data = {"raw": r.text[:2000]}
+
+            if r.status_code in (200, 201):
+                break
+
+            if attempt >= max_attempts or not _adsconex_is_transient(r.status_code, data):
+                break
+
+            wait_s = max(5.0, _adsconex_retry_after_seconds(r, base_delay * (2 ** (attempt - 1))))
+            detail = json.dumps(data, ensure_ascii=False)[:200] if isinstance(data, (dict, list)) else str(data)[:200]
+            self._log(
+                f"Adsconex HTTP {r.status_code} (loi tam thoi) | thu lai {attempt + 1}/{max_attempts} "
+                f"sau {wait_s:.0f}s | {detail}"
+            )
+            time.sleep(wait_s)
+
+        if r is None:
+            raise RuntimeError("Adsconex: khong gui duoc yeu cau nao.")
 
         try:
             data = r.json()
