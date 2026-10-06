@@ -3,7 +3,7 @@
 > Đọc file này trước khi sửa tool. Cập nhật lại mỗi khi rời tool.
 
 ## Trạng thái hiện tại (2026-10-06)
-- **Version đang chạy:** v23.6.6
+- **Version đang chạy:** v23.6.7
 - **Repo GitHub:** https://github.com/NaupUuh/Phong_DHue
 - **Thư mục máy:** `Phong_DHue`
 - **Cách chạy:** bấm đúp `CHAY_Phong_DHue.bat` (hoặc `viet_drama_V23.6_dashboard_thumbnail.py`)
@@ -107,6 +107,38 @@ python release.py 23.7.0 "Mô tả"
 # đồng bộ lên ổ Z
 python sync_z.py
 ```
+
+### Fix 2026-10-06 (v23.6.7) — ANH BIA: THAY DETECTOR MAT (OpenCV 5.x) + UU TIEN CAM XUC
+- **Yeu cau:** anh bia phai la anh CO NGUOI/nhan vat, NET nhat co the, cam xuc/drama cang cao cang tot.
+- **ROOT CAUSE (quan trong nhat):** OpenCV **5.0.0** da **XOA HAN** `cv2.CascadeClassifier`
+  va `cv2.data.haarcascades` -> `FACE_CASCADE = None` -> **tool MUA MAT hoan toan**; logic
+  "uu tien anh co nguoi" bi vo hieu, chi con chon theo do net thuan -> anh bia hay ra canh
+  KHONG CO NGUOI. (Khong phai loi cua ban cu — do OpenCV nang cap.)
+- **FIX:** thay Haar cascade bang **YuNet `cv2.FaceDetectorYN`** (`face_detection_yunet_2023mar.onnx`,
+  232 KB) + **model cam xuc** `facial_expression_recognition_mobilefacenet_2022july_int8bq.onnx`.
+  - Model **tu tai runtime** ve `~/.video_story_publisher_models` (KHONG commit vao repo);
+    URL chinh `media.githubusercontent.com/media/opencv/opencv_zoo/...`, URL du phong raw.
+    (Luu y: `raw.githubusercontent` tra ve 131 byte = LFS pointer -> phai dung `media.`.)
+  - **Offline fallback**: khong tai duoc model -> in canh bao, quay ve cham do net, KHONG crash.
+  - **Thread-local detector** (`_FACE_TLS`) vi `extract_frames` chay ThreadPool.
+- **Bang diem moi (thu tu uu tien ro rang):** CO NGUOI > DO NET > CAM XUC/DRAMA.
+  `FACE_GATE=3600` > `SHARP_WEIGHT(3300)+DRAMA_WEIGHT(320)` => **moi khung co mat LUON thang
+  khung khong mat**. Trong nhom co mat: mat to + o giua + drama cao thang.
+  (Ban va v1 tung nhan `score *= 0.35` khi mo -> nhan ca phan thuong "co nguoi" -> khung mo
+  co mat thua khung net khong mat. Da sua o v2: TACH thuong co nguoi ra khoi phat do net.)
+- **Nhan cam xuc** (thu tu model tra ve): `angry, disgust, fearful, happy, neutral, sad, surprised`.
+  Tien xu ly = **align 5 landmark STD + normalize**. `EMOTION_DRAMA`: angry/fearful 1.0,
+  sad 0.92, surprised 0.82, disgust 0.68, happy 0.55, neutral 0.12.
+- **Cat vuong 290x290 theo KHUON MAT** (`make_social_thumbnail`): mat ~45% tu tren xuong ->
+  khong cat tran. Cover web 760x400 (`make_story_cover`) giu nguyen.
+- **Hieu nang (do that, 84 khung/video):** `max_width=480` -> +2.1s/video so voi ban cu
+  (trump 8.9->11.2s, Debt 8.4->10.3s). Chi rieng buoc quet khung; cac buoc khac (Whisper/TTS/render)
+  ton hang phut nen khong dang ke. **Da thu `max_width=384`: nhanh hon 30% NHUNG lech khung
+  chon o 1/4 video -> KHONG dung** (uutien chat luong anh bia). Giu 480.
+- **E2E PASS (ca 2 tool):** 12/12 khung co mat, `find_person_thumbnail_frame` tim thay,
+  thumbnail web 290x290 + cover 760x400 dung kich thuoc.
+- **Backup ban cu:** `_backup_old/*.py.bak` (git + sync Z + updater deu bo qua nho `*.bak`).
+- **Bump:** `APP_VERSION` 23.6.6 -> **23.6.7**. (ADung: 22.100.3 -> 22.100.4.)
 
 ### Fix 2026-10-06 (v23.6.6) — PORT TAB/NET ADSCONEX TU ADUNG SANG DHUE
 - **Yeu cau:** ADung (V22.99) co tab + net Adsconex, DHue chua co -> port sang.
