@@ -1,10 +1,10 @@
 # TIẾP TỤC — Phong_DHue
 
-**Phiên bản hiện tại: v23.6.12** (06/10/2026)
+**Phiên bản hiện tại: v23.6.13** (06/10/2026)
 
 ## Trạng thái: ĐANG CHẠY ỔN
 
-## Việc vừa xong (v23.6.12) — BỎ HOST CHẾT + VÁ 401/403
+## Việc vừa xong (v23.6.13) — BỎ HOST CHẾT + VÁ 401/403
 
 **Nguyên nhân gốc lỗi 403 `blogbio_verify_failed` (đã chốt bằng thực nghiệm):**
 Tool có **host chết `usjusticereport.cfx.bz`** làm mặc định. Host này CHẾT THẬT:
@@ -22,7 +22,7 @@ Tool có **host chết `usjusticereport.cfx.bz`** làm mặc định. Host này 
 - Bấm "⬆ Cập nhật", hoặc sửa tab Adsconex: base URL = `https://dramanest.gigglelo.com/api`, site host = `dramanest.gigglelo.com`.
 - Bấm **"Kiểm tra token"** (phải OK) → **"Đăng lại bài lỗi"**.
 
-## Việc vừa xong (v23.6.11) — TỐI ƯU TỈ LỆ ĐĂNG ĐƯỢC BÀI
+## Việc vừa xong (v23.6.13) — TỐI ƯU TỈ LỆ ĐĂNG ĐƯỢC BÀI
 
 Bối cảnh: hôm 06/10 có khung giờ **73–88% bài bị 502** (12:20–17:15), 97 bài lỗi.
 Nguyên nhân đã chốt: **Cloudflare `origin_bad_gateway`** trên zone `dramanest.gigglelo.com`
@@ -109,7 +109,7 @@ cd /c/Users/Admin/Desktop/Phong_DHue
 
 ## Việc còn lại / lưu ý
 
-- **Chưa test end-to-end POST thật** cho DHue v23.6.11 (test bằng response giả để không tạo
+- **Chưa test end-to-end POST thật** cho DHue v23.6.13 (test bằng response giả để không tạo
   bài rác). Lần chạy batch tới xem log có dòng `Adsconex xin luot dang:` không.
 - **Mỗi máy phải dùng 1 folder riêng** — 2 máy cùng đăng 1 folder sẽ đăng trùng.
 - Nếu Z không kết nối được, tool **chỉ giãn cách tại máy** (15s) → nhiều máy có thể vượt trần chung
