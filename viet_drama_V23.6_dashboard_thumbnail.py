@@ -279,7 +279,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.15"
+APP_VERSION = "23.6.16"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -995,7 +995,121 @@ def _adsconex_has_published(work_dir) -> bool:
         return False
 
 
-def find_pending_adsconex(output_root) -> list:
+def adsconex_split_chunks(content: str, max_chars: int = 36000) -> list:
+    """Chia content chapter-mode thanh nhieu phan <= max_chars.
+
+    Origin cua site sap khi request qua lon (da do that: >~50KB -> Cloudflare 502,
+    ~11s roi cut; <=~40KB -> 201 trong 2-9s). Chia nho roi gui nhieu lan CUNG
+    'permalink' thi server tu gop vao MOT series, chuong giu dung thu tu.
+    Tra [content] (1 phan) khi content da du nho.
+    """
+    content = content or ""
+    if len(content) <= max_chars:
+        return [content]
+    mk = [m.start() for m in re.finditer(r"<p>CHAPTER\s+\d+\s*-\s*[^<]*</p>", content)]
+    if not mk:
+        return [content]
+    intro = content[:mk[0]]
+    blocks = [content[mk[i]:(mk[i + 1] if i + 1 < len(mk) else len(content))]
+              for i in range(len(mk))]
+    chunks = []
+    cur = intro
+    for b in blocks:
+        if cur and len(cur) + len(b) > max_chars and cur != intro:
+            chunks.append(cur)
+            cur = intro + b
+        elif cur and len(cur) + len(b) > max_chars and cur == intro:
+            # intro + 1 chuong van qua lon -> de nguyen (hien tuong hiem)
+            chunks.append(cur + b)
+            cur = intro
+        else:
+            cur += b
+    if cur and cur != intro:
+        chunks.append(cur)
+    return chunks or [content]
+
+
+def _adsconex_payload_slug(payload) -> str:
+    """Slug goc cua payload (permalink) de doi chieu voi series da co tren site."""
+    try:
+        return str((payload or {}).get("permalink") or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _adsconex_headers(cfg) -> dict:
+    base = str((cfg or {}).get("adsconex_base_url") or "https://dramanest.gigglelo.com/api").strip().rstrip("/")
+    host = urlsplit(base).netloc or "dramanest.gigglelo.com"
+    token = str((cfg or {}).get("adsconex_api_key") or "").strip()
+    return {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Authorization": f"Bearer {token}",
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"),
+        "Referer": f"https://{host}/admin/api-docs",
+        "Origin": f"https://{host}",
+        "sec-ch-ua": '"Chromium";v="141", "Not?A_Brand";v="24", "Google Chrome";v="141"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+    }
+
+
+def adsconex_series_id_for_slug(cfg, slug, tries: int = 3) -> int:
+    """ID cua series vua tao (khop theo slug/permalink).
+
+    Can thiet khi chia content thanh nhieu phan: moi POST /posts KHONG truyen
+    series_id se TAO SERIES MOI (da kiem chung: 2 phan -> 2 series, chuong bi
+    tach). Phan thu 2 tro di phai kem series_id nay de server gop dung 1 series.
+    """
+    slug = str(slug or "").strip().lower()
+    if not slug:
+        return 0
+    base = str((cfg or {}).get("adsconex_base_url") or "https://dramanest.gigglelo.com/api").strip().rstrip("/")
+    headers = _adsconex_headers(cfg)
+    for _ in range(max(1, tries)):
+        try:
+            r = requests.get(f"{base}/series", headers=headers, timeout=60)
+            if r.status_code == 200:
+                for s in (r.json() or []):
+                    if isinstance(s, dict) and str(s.get("slug") or "").strip().lower() == slug:
+                        return safe_int(s.get("id"), 0)
+        except Exception:
+            pass
+        time.sleep(2)
+    return 0
+
+
+def adsconex_existing_slugs(cfg) -> set:
+    """Slug cua MOI series da co tren site (GET /series).
+
+    Dung de TRANH dang trung: Cloudflare 502 nghia la response bi cat, KHONG co
+    nghia origin chua tao bai. Da bat qua that: vai bai luu lai voi http_status
+    502 nhung series DA ton tai tren site. Neu khong doi chieu ma dang lai mu ->
+    sinh bai trung. Loi goi API -> tra set rong (khong chan dang lai).
+    """
+    try:
+        base = str((cfg or {}).get("adsconex_base_url") or "https://dramanest.gigglelo.com/api").strip().rstrip("/")
+        token = str((cfg or {}).get("adsconex_api_key") or "").strip()
+        if not token:
+            return set()
+        headers = _adsconex_headers(cfg)
+        r = requests.get(f"{base}/series", headers=headers, timeout=60)
+        if r.status_code != 200:
+            return set()
+        data = r.json()
+        if not isinstance(data, list):
+            return set()
+        return {str((s or {}).get("slug") or "").strip().lower()
+                for s in data if isinstance(s, dict)}
+    except Exception:
+        return set()
+
+
+def find_pending_adsconex(output_root, cfg=None) -> list:
     """Liet ke [(work_dir, payload)] cua cac bai tung loi va CHUA dang duoc."""
     items = []
     try:
@@ -1004,6 +1118,9 @@ def find_pending_adsconex(output_root) -> list:
         return items
     if not root.is_dir():
         return items
+    existing = adsconex_existing_slugs(cfg) if cfg else set()
+    skip_codes = {"401", "403", "429", "500", "502", "503", "504",
+                  "520", "521", "522", "523", "524", "network"}
     for work_dir in sorted(root.glob("_story_output_*"), key=lambda p: p.name):
         if _adsconex_has_published(work_dir):
             continue
@@ -1017,23 +1134,32 @@ def find_pending_adsconex(output_root) -> list:
             if isinstance(data, dict):
                 payload = data.get("payload")
         else:
-            # Bai loi 401/403 truoc day chi luu publish_payload_adsconex.json +
-            # publish_response_adsconex.json (KHONG co file pending) -> nut "Dang lai"
-            # bo sot hang loat. Doc lai payload do de cuu.
-            # An toan: 401/403 = origin TU CHOI -> bai CHUA duoc tao (da kiem chung 404),
-            # nen dang lai KHONG sinh bai trung.
+            # Bai loi chi luu publish_payload_adsconex.json + publish_response_adsconex.json
+            # (KHONG co file pending) -> truoc day nut "Dang lai" chi nhat 401/403 nen bo
+            # sot het bai 502/503/504/429/network. Doc lai payload do de cuu.
             try:
                 rp = work_dir / "publish_response_adsconex.json"
                 pp = work_dir / "publish_payload_adsconex.json"
                 if rp.is_file() and pp.is_file():
                     resp = json.loads(rp.read_text(encoding="utf-8") or "{}")
                     code = str((resp or {}).get("http_status", ""))
-                    if code in ("401", "403"):
+                    if code in skip_codes:
                         payload = json.loads(pp.read_text(encoding="utf-8") or "{}")
             except Exception:
                 payload = None
-        if isinstance(payload, dict) and payload.get("content"):
-            items.append((work_dir, payload))
+        if not (isinstance(payload, dict) and payload.get("content")):
+            continue
+        slug = _adsconex_payload_slug(payload)
+        if slug and slug in existing:
+            # Series DA co tren site (502 la loi gia) -> KHONG dang lai de tranh trung.
+            try:
+                _safe_write_text(work_dir / "republish_skipped_already_live.txt",
+                                 f"Series slug '{slug}' da co tren site. Bo qua dang lai.\n",
+                                 encoding="utf-8")
+            except Exception:
+                pass
+            continue
+        items.append((work_dir, payload))
     return items
 
 
@@ -3827,6 +3953,65 @@ Return STRICT JSON only:
             adsconex_note_result(True)
         return r, data, payload
 
+    def _adsconex_send_all(self, payload: dict):
+        """Chia content thanh nhieu phan nho roi gui lien tiep (xem adsconex_split_chunks).
+
+        Origin cua site 502 khi 1 request qua lon (da do: >~50KB -> 502 sau ~11s).
+        Gui nhieu lan CUNG 'permalink' -> server tu gop vao MOT series, chuong dung
+        thu tu. Tra (r, data, payload) nhu _adsconex_send de caller khong phai doi:
+        - Moi phan OK: data = {"posts": <gop tat ca>, "count": N, "chunks": k}
+        - Bat ky phan loi: tra loi cua phan do + payload GOC (de luu nguyen de dang lai).
+        """
+        content = str((payload or {}).get("content") or "")
+        max_chars = max(8000, safe_int(self.cfg.get("adsconex_max_chars_per_request", 36000), 36000))
+        chunks = adsconex_split_chunks(content, max_chars)
+        if len(chunks) <= 1:
+            return self._adsconex_send(payload)
+
+        self._log(f"Adsconex: content {len(content)} ky tu -> chia {len(chunks)} phan "
+                  f"(origin 502 khi request qua lon), gui lien tiep cung permalink.")
+        all_posts = []
+        last_r = None
+        series_id = 0
+        for idx, chunk in enumerate(chunks, 1):
+            part = dict(payload)
+            part["content"] = chunk
+            # Chi phan dau mang SEO/thumbnail/series metadata; cac phan sau chi can
+            # title + content + permalink de server gop dung series.
+            if idx > 1:
+                for k in ("seo_title", "seo_description", "seokeyword",
+                          "feature_image", "apply_image_to_all"):
+                    part.pop(k, None)
+                # BAT BUOC: khong co series_id thi moi POST tao 1 series moi ->
+                # chuong bi tach ra nhieu series (da bi that). Phan 2+ phai tro
+                # ve dung series cua phan 1.
+                if series_id:
+                    part["series_id"] = series_id
+                else:
+                    self._log("Adsconex CANH BAO: khong lay duoc series_id cua phan 1 "
+                              "-> phan sau co the tao series rieng (chuong bi tach).")
+            self._log(f"Adsconex phan {idx}/{len(chunks)} | {len(chunk)} ky tu")
+            r, data, _ = self._adsconex_send(part)
+            last_r = r
+            if r is None or r.status_code not in (200, 201):
+                self._log(f"Adsconex phan {idx}/{len(chunks)} LOI "
+                          f"(HTTP {r.status_code if r is not None else 'network'}) - "
+                          f"luu lai toan bo payload de dang lai.")
+                return r, data, payload
+            posts = data.get("posts") if isinstance(data, dict) else None
+            if not isinstance(posts, list) or not posts:
+                return r, data, payload
+            all_posts.extend(posts)
+            if idx == 1 and len(chunks) > 1:
+                series_id = adsconex_series_id_for_slug(self.cfg, payload.get("permalink"))
+                if series_id:
+                    self._log(f"Adsconex: series_id={series_id} -> gop cac phan sau vao cung series.")
+            if idx < len(chunks):
+                time.sleep(max(0.0, safe_float(self.cfg.get("adsconex_chunk_gap_seconds", 3), 3.0)))
+        merged = {"posts": all_posts, "count": len(all_posts), "chunks": len(chunks)}
+        self._log(f"Adsconex: da dang {len(all_posts)} chuong qua {len(chunks)} phan.")
+        return last_r, merged, payload
+
     def publish_adsconex(self, story: dict) -> dict:
         """Dang bai len Adsconex (nen Blogbio) o che do chapter.
 
@@ -3893,7 +4078,7 @@ Return STRICT JSON only:
             f"thumbnail={'YES' if 'feature_image' in payload else 'NO'} | "
             f"category={payload.get('category', 'none')}"
         )
-        r, data, payload = self._adsconex_send(payload)
+        r, data, payload = self._adsconex_send_all(payload)
 
         if self.work_dir:
             try:
@@ -4148,7 +4333,7 @@ Return STRICT JSON only:
         previous_work_dir = getattr(self, "work_dir", None)
         self.work_dir = work_dir
         try:
-            r, data, payload = self._adsconex_send(payload)
+            r, data, payload = self._adsconex_send_all(payload)
             try:
                 _safe_write_text(work_dir / "publish_response_adsconex.json",
                                  json.dumps({"http_status": (r.status_code if r is not None else "network"),
@@ -5460,7 +5645,10 @@ class App(tk.Tk):
             ads_buttons,
             text="Lấy link site",
             command=lambda: webbrowser.open(
-                "https://" + str(self.vars["adsconex_site_host"].get() or "dramanest.gigglelo.com").strip().strip("/"))
+                "https://" + re.sub(
+                    r"^https?://", "",
+                    str(self.vars["adsconex_site_host"].get() or "dramanest.gigglelo.com").strip().strip("/"),
+                    flags=re.I))
         ).pack(side="left", padx=6)
 
         ads_rate = ttk.LabelFrame(ads, text="Giới hạn tốc độ đăng (dùng chung cho MỌI máy)")
@@ -5817,7 +6005,8 @@ class App(tk.Tk):
         try:
             info = updater.check_update()
         except Exception as e:
-            self.after(0, lambda: self._update_fail(f"{e}"))
+            _err = str(e)
+            self.after(0, lambda: self._update_fail(_err))
             return
         if not info.get("ok"):
             self.after(0, lambda: self._update_fail(
@@ -5855,7 +6044,8 @@ class App(tk.Tk):
         try:
             res = updater.apply_update(info.get("zip") or "")
         except Exception as e:
-            self.after(0, lambda: self._update_fail(f"{e}"))
+            _err = str(e)
+            self.after(0, lambda: self._update_fail(_err))
             return
         if not res.get("ok"):
             self.after(0, lambda: self._update_fail(
@@ -6224,7 +6414,7 @@ class App(tk.Tk):
             messagebox.showwarning(APP_NAME, "Chưa nhập Adsconex API Token trong tab Adsconex.")
             return
         output_root = folder / "Story Outputs"
-        pending = find_pending_adsconex(output_root)
+        pending = find_pending_adsconex(output_root, cfg)
         if not pending:
             messagebox.showinfo(APP_NAME, f"Không có bài lỗi nào cần đăng lại trong:\n{output_root}")
             return
@@ -6394,7 +6584,7 @@ class App(tk.Tk):
                     # ---- Dang lai cac bai 502 da luu payload (cuoi batch, origin da hoi) ----
                     # Khong ton Vision/Writer: chi gui lai dung payload da luu.
                     try:
-                        pending = find_pending_adsconex(output_root)
+                        pending = find_pending_adsconex(output_root, cfg)
                     except Exception:
                         pending = []
                     if pending:

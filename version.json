@@ -1,5 +1,5 @@
 {
-  "version": "23.6.15",
-  "notes": "Fix loi Mo_An.vbs: VBScript khong co escape \\\" cho dau ngoac kep - phai viet \"\"\"\" & bat & \"\"\"\" (loi 'Expected end of statement' dong 20 lam file .vbs khong mo duoc tool).",
+  "version": "23.6.16",
+  "notes": "Fix 502 Adsconex: chia nho request >36KB thanh nhieu POST kem series_id (khong tach series, chuong giu dung thu tu); nut 'Dang lai bai loi' nhat ca bai 502/503/504/429/network (truoc chi 401/403 nen bo sot); chong dang trung bang doi chieu slug voi GET /series; sua https://https:// o nut 'Lay link site'; sua NameError khi cap nhat that bai.",
   "date": "2026-10-07"
 }
