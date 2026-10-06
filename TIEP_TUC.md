@@ -122,3 +122,14 @@ cd /c/Users/Admin/Desktop/Phong_DHue
 
 - `%LOCALAPPDATA%\Temp\ads502\patch_scripts\DHue\_patch502.py` (port từ ADung, 10 điểm).
 - Test: `%LOCALAPPDATA%\Temp\ads502\test_dhue.py`.
+
+
+## 2026-10-07 (moi) - Fix Mo_An.vbs
+- LOI: 'Microsoft VBScript compilation error: Expected end of statement' tai dong 20
+  khi double-click Mo_An.vbs.
+- NGUYEN NHAN: VBScript KHONG co escape \" nhu C/JS. Muon 1 dau " trong chuoi phai
+  viet "" (gap doi).
+  SAI : sh.Run """ & bat & """ hidden", 0, False
+  DUNG: sh.Run """" & bat & """", 0, False
+- DA TEST: cscript //nologo -> exit 0, goi dung .bat (tao marker). Da push GitHub.
+- Neu gap lai loi nay o may khac: chay updater.py hoac chep de Mo_An.vbs ban moi.
