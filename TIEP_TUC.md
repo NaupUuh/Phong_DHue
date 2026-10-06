@@ -1,8 +1,26 @@
 # TIẾP TỤC — Phong_DHue
 
-**Phiên bản hiện tại: v23.6.11** (06/10/2026)
+**Phiên bản hiện tại: v23.6.12** (06/10/2026)
 
 ## Trạng thái: ĐANG CHẠY ỔN
+
+## Việc vừa xong (v23.6.12) — BỎ HOST CHẾT + VÁ 401/403
+
+**Nguyên nhân gốc lỗi 403 `blogbio_verify_failed` (đã chốt bằng thực nghiệm):**
+Tool có **host chết `usjusticereport.cfx.bz`** làm mặc định. Host này CHẾT THẬT:
+- `GET /` → 200 (site tĩnh còn sống) NHƯNG mọi endpoint `/api/*` → **403 `blogbio_verify_failed` / `verify_status:502`** với MỌI token (kể cả token đúng).
+- Cùng token đó bắn vào `dramanest.gigglelo.com` → **200**.
+→ Máy nào chạy với config trống/mặc định sẽ trỏ vào host chết → 403 toàn bộ.
+
+**Cách ly bằng chứng:** cùng 1 token: `dramanest.gigglelo.com` GET 200 / POST 422; `usjusticereport.cfx.bz` GET 403 / POST 403. Token rác cũng ra 403 y hệt ⇒ lỗi này là **host/tầng verify**, nhìn 403 KHÔNG phân biệt được token sai hay host chết.
+
+### Đã vá
+1. **Bỏ hẳn host chết** (12 chỗ) → `dramanest.gigglelo.com`. Chỉ dùng host điền trong tool.
+2. **Vá 401/403:** token bị từ chối → **LƯU payload** để đăng lại (trước đây 42 bài 403 **mất trắng**), kèm thông báo rõ nguyên nhân. An toàn: bài 403 đã kiểm chứng KHÔNG hề được tạo (404) → đăng lại không sinh trùng.
+
+### Việc còn lại cho máy lỗi
+- Bấm "⬆ Cập nhật", hoặc sửa tab Adsconex: base URL = `https://dramanest.gigglelo.com/api`, site host = `dramanest.gigglelo.com`.
+- Bấm **"Kiểm tra token"** (phải OK) → **"Đăng lại bài lỗi"**.
 
 ## Việc vừa xong (v23.6.11) — TỐI ƯU TỈ LỆ ĐĂNG ĐƯỢC BÀI
 
