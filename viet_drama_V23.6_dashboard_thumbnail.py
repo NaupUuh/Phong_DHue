@@ -279,7 +279,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.9"
+APP_VERSION = "23.6.10"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -426,6 +426,9 @@ DEFAULT_CONFIG = {
     "adsconex_apply_image_to_all": True,
     "adsconex_retry_count": "3",
     "adsconex_retry_delay": "60",
+    "adsconex_rate_limit_per_min": "6",
+    "adsconex_rate_shared_path": "",
+    "adsconex_rate_fallback_delay": "15",
     "language": "English",
     "whisper_model": "small",
     "whisper_device": "cpu",
@@ -739,6 +742,174 @@ def _adsconex_is_transient(status_code, payload=None):
     if isinstance(payload, dict) and payload.get("retryable") is True:
         return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# GIOI HAN TOC DO DANG ADSCONEX (nhieu may chay song song, dung chung 1 tran)
+# ---------------------------------------------------------------------------
+# Net gioi han ~6-10 bai/phut (1 bai = 1 POST mode=chapter = ca truyen ~10 chuong).
+# N may chay song song ma moi may tu gian cach thi tong van vuot tran -> 502 hang loat.
+# Cach lam: truoc khi POST, may "danh dau" 1 bai vao thu muc CHUNG tren o Z, sau khi
+# dem so dau trong 60s qua. Du tran thi cho. Cua so TRUOT 60s duoc bao dam: khong bao
+# gio co qua N dau trong BAT KY cua so 60s nao (khong phai "N bai moi phut" kieu cua
+# so co dinh - kieu do van lot 2N bai o ranh gioi).
+# CHI dung 2 thu da kiem chung chay dung tren RaiDrive/WebDAV:
+#   - O_CREAT|O_EXCL lam mutex (stress 40 vong: moi vong dung 1 nguoi thang)
+#   - liet ke thu muc luon thay file do may khac vua tao
+# KHONG doc noi dung file: o Z cache noi dung doc (doc lai file vua ghi mat 0.000s)
+# nen doc file trang thai co the ra ban CU -> hai may cung tuong con luot -> lot tran.
+# O Z loi / khong truy cap duoc -> tu gian cach tai may nay, tool khong bi treo.
+ADSCONEX_RATE_DEFAULT_PATH = r"Z:\HQData-2\TOOLS TỔNG HỢP\_adsconex_rate"
+ADSCONEX_RATE_LOCK_NAME = "_lock"
+ADSCONEX_RATE_WINDOW = 60.0             # cua so dem luot dang (giay)
+ADSCONEX_RATE_KEEP = 180.0              # xoa dau cu hon muc nay (giay)
+ADSCONEX_RATE_LOCK_STALE = 30.0         # khoa cu hon -> may do da crash, pha duoc
+ADSCONEX_RATE_LOCK_WAIT_MAX = 120.0     # cho khoa qua lau -> coi nhu o Z loi
+ADSCONEX_RATE_MIN_GAP_SAFETY = 0.5     # bien an toan cho gian cach toi thieu (giay)
+_adsconex_local_lock = threading.Lock()
+_adsconex_local_last_post = [0.0]
+
+
+def _adsconex_rate_dir(cfg) -> str:
+    """Thu muc chung giua cac may. De trong -> duong dan mac dinh tren o Z."""
+    raw = str(cfg.get("adsconex_rate_shared_path") or "").strip()
+    return raw or ADSCONEX_RATE_DEFAULT_PATH
+
+
+def _adsconex_rate_limits(cfg):
+    """(so bai toi da moi phut cho TAT CA cac may, gian cach tai may khi Z loi)."""
+    per_min = max(1, min(60, safe_int(cfg.get("adsconex_rate_limit_per_min", 6), 6)))
+    gap = max(0.0, min(600.0, safe_float(cfg.get("adsconex_rate_fallback_delay", 15), 15.0)))
+    return per_min, gap
+
+
+def _adsconex_local_wait(gap_seconds) -> float:
+    """Fallback khi o Z khong dung duoc: gian cach tai may nay."""
+    if gap_seconds <= 0:
+        return 0.0
+    with _adsconex_local_lock:
+        now = time.time()
+        wait = _adsconex_local_last_post[0] + gap_seconds - now
+        if wait > 0:
+            time.sleep(wait)
+        _adsconex_local_last_post[0] = time.time()
+        return max(0.0, wait)
+
+
+def _adsconex_claim_slot(cfg):
+    """Thu danh dau 1 luot dang.
+
+    Tra ("shared", 0.0)     -> da danh dau duoc, duoc phep POST
+        ("wait", giay)      -> het luot, cho roi thu lai
+        ("fallback", gap)   -> o Z khong dung duoc, gian cach tai may
+    """
+    per_min, local_gap = _adsconex_rate_limits(cfg)
+    dir_path = _adsconex_rate_dir(cfg)
+    lock_path = os.path.join(dir_path, ADSCONEX_RATE_LOCK_NAME)
+    try:
+        os.makedirs(dir_path, exist_ok=True)
+    except Exception:
+        return ("fallback", local_gap)
+
+    waited = 0.0
+    while True:
+        fd = None
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except (FileExistsError, PermissionError):
+            # RaiDrive (WebDAV) tra PermissionError [Errno 13] thay vi
+            # FileExistsError khi file khoa DA ton tai -> van la "may khac dang giu".
+            # Phan biet voi "o Z hong" bang cach kiem tra thu muc cha.
+            if not os.path.isdir(dir_path):
+                return ("fallback", local_gap)
+            try:
+                if time.time() - os.path.getmtime(lock_path) > ADSCONEX_RATE_LOCK_STALE:
+                    os.remove(lock_path)
+            except OSError:
+                pass
+            if waited >= ADSCONEX_RATE_LOCK_WAIT_MAX:
+                return ("fallback", local_gap)
+            time.sleep(0.05)
+            waited += 0.05
+            continue
+        except OSError:
+            # Khong mo duoc file tren o mang -> gian cach tai may.
+            return ("fallback", local_gap)
+
+        try:
+            now = time.time()
+            try:
+                names = os.listdir(dir_path)
+            except OSError:
+                return ("fallback", local_gap)
+            inside = []
+            for name in names:
+                if not (name.startswith("s_") and name.endswith(".mrk")):
+                    continue
+                mark_path = os.path.join(dir_path, name)
+                try:
+                    mtime = os.path.getmtime(mark_path)
+                except OSError:
+                    continue
+                if now - mtime > ADSCONEX_RATE_KEEP:
+                    try:
+                        os.remove(mark_path)
+                    except OSError:
+                        pass
+                    continue
+                if (now - mtime) < ADSCONEX_RATE_WINDOW:
+                    inside.append(mtime)
+            # Gian cach toi thieu giua 2 bai lien tiep. Neu chi dem theo cua so
+            # 60s thi 6 bai dau se dong loat trong ~0.5s (da do that) -> origin bi
+            # soc -> 502, du khong vuot tran. Dung mtime cua dau MOI NHAT.
+            min_gap = (ADSCONEX_RATE_WINDOW / per_min) + ADSCONEX_RATE_MIN_GAP_SAFETY
+            since_last = (now - max(inside)) if inside else None
+            if since_last is not None and since_last < min_gap:
+                wait_s = max(0.2, min_gap - since_last + 0.05)
+            elif len(inside) < per_min:
+                mark_path = os.path.join(dir_path, "s_%d_%s_%d.mrk" % (
+                    int(now * 1000), platform.node(), os.getpid()))
+                with open(mark_path, "w", encoding="utf-8") as fh:
+                    fh.write("")
+                return ("shared", 0.0)
+            else:
+                # Het luot: cho cho dau cu nhat ra khoi cua so roi thu lai.
+                wait_s = max(0.2, (min(inside) + ADSCONEX_RATE_WINDOW) - now + 0.05)
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+            try:
+                os.remove(lock_path)
+            except OSError:
+                pass
+
+        return ("wait", wait_s)
+
+
+def _adsconex_take_shared_slot(cfg):
+    """Xin luot dang, cho den khi duoc phep. Tra (mode, so_giay)."""
+    while True:
+        mode, extra = _adsconex_claim_slot(cfg)
+        if mode == "wait":
+            time.sleep(extra)
+            continue
+        return (mode, extra)
+
+
+def _adsconex_wait_for_slot(cfg, log=None) -> str:
+    """Cho toi khi duoc phep POST 1 bai. Tra mo ta ngan de ghi log."""
+    per_min, _gap = _adsconex_rate_limits(cfg)
+    mode, extra = _adsconex_take_shared_slot(cfg)
+    if mode == "fallback":
+        waited = _adsconex_local_wait(extra)
+        note = ("o Z khong dung duoc -> gian cach tai may %.0fs" % extra)
+        if waited > 0.5:
+            note += " (cho %.0fs)" % waited
+        return note
+    return "tran chung %d bai/phut" % per_min
 
 
 def published_adsconex_link(result: dict, site_host: str) -> str:
@@ -1805,6 +1976,20 @@ def normalize_story_html_for_publish(html_text: str) -> str:
 
 def compact_meta_text(value, max_len: int) -> str:
     value = "" if value is None else str(value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value[:max_len]
+
+def clean_meta_text(value, max_len: int) -> str:
+    """Nhu compact_meta_text nhung lam sach ky tu Adsconex tu choi (HTTP 422).
+
+    Da kiem chung tren 168 bai that: seo_description chua '--' (hai dau gach noi
+    lien nhau) bi tra 422 "The seo_description field contains invalid input.",
+    nen doi '--' thanh ' - ' va bo ky tu dieu khien truoc khi gui.
+    """
+    value = "" if value is None else str(value)
+    value = value.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    value = re.sub(r"[\x00-\x1f\x7f]", " ", value)
+    value = value.replace("--", " - ")
     value = re.sub(r"\s+", " ", value).strip()
     return value[:max_len]
 
@@ -3478,9 +3663,9 @@ Return STRICT JSON only:
         raw_category = str(self.cfg.get("adsconex_category", "") or "").strip()
         if raw_category.isdigit():
             payload["category"] = int(raw_category)
-        seo_title = compact_meta_text(story.get("meta_title") or story.get("title") or "", 240)
-        seo_desc = compact_meta_text(story.get("meta_description") or "", 500)
-        keywords = compact_meta_text(story.get("keywords") or "", 500)
+        seo_title = clean_meta_text(story.get("meta_title") or story.get("title") or "", 240)
+        seo_desc = clean_meta_text(story.get("meta_description") or "", 500)
+        keywords = clean_meta_text(story.get("keywords") or "", 500)
         if seo_title:
             payload["seo_title"] = seo_title
         if seo_desc:
@@ -3507,7 +3692,10 @@ Return STRICT JSON only:
         base_delay = max(5.0, safe_float(self.cfg.get("adsconex_retry_delay", 60), 60.0))
         r = None
         data = {}
+        seo_stripped = False
         for attempt in range(1, max_attempts + 1):
+            # Tran toc do dung chung: cho toi khi co luot moi POST.
+            self._log("Adsconex xin luot dang: " + _adsconex_wait_for_slot(self.cfg))
             try:
                 r = requests.post(endpoint, headers=headers, json=payload, timeout=180)
             except Exception as e:
@@ -3525,6 +3713,19 @@ Return STRICT JSON only:
 
             if r.status_code in (200, 201):
                 break
+
+            if r.status_code == 422 and "seo_description" in json.dumps(data, ensure_ascii=False).lower() \
+                    and "seo_description" in payload and not seo_stripped:
+                # Server tu choi meta description (da gap that: chuoi chua '--').
+                # Go han truong nay roi gui lai -> bai van dang duoc, chi thieu meta
+                # description, thay vi mat ca bai.
+                payload.pop("seo_description", None)
+                seo_stripped = True
+                self._log(
+                    "Adsconex 422: seo_description bi tu choi -> go truong nay va dang lai "
+                    "(bai van len, chi thieu meta description)."
+                )
+                continue
 
             if attempt >= max_attempts or not _adsconex_is_transient(r.status_code, data):
                 break
@@ -4974,6 +5175,24 @@ class App(tk.Tk):
             command=lambda: webbrowser.open(
                 "https://" + str(self.vars["adsconex_site_host"].get() or "usjusticereport.cfx.bz").strip().strip("/"))
         ).pack(side="left", padx=6)
+
+        ads_rate = ttk.LabelFrame(ads, text="Giới hạn tốc độ đăng (dùng chung cho MỌI máy)")
+        ads_rate.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(10, 4))
+        ads_rate.columnconfigure(1, weight=1)
+        self._row(ads_rate, 0, "Số bài mỗi phút (tổng)", "adsconex_rate_limit_per_min")
+        self._row(ads_rate, 1, "File trạng thái chung", "adsconex_rate_shared_path")
+        self._row(ads_rate, 2, "Giãn cách khi Z lỗi (giây)", "adsconex_rate_fallback_delay")
+        ttk.Label(
+            ads_rate,
+            text=(
+                "Mọi máy cùng đọc/ghi file trạng thái trên ổ Z nên tổng số bài gửi lên net "
+                "không vượt mức đặt ở trên \u2014 chạy bao nhiêu máy song song cũng được.\n"
+                "Mặc định " + ADSCONEX_RATE_DEFAULT_PATH +
+                " (net giới hạn ~6-10 bài/phút; 1 bài = cả truyện ~10 chương).\n"
+                "Ổ Z lỗi thì tool tự giãn cách tại máy theo ô cuối, không treo."
+            ),
+            foreground="#555", justify="left", wraplength=950
+        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 2))
 
         # ============================================================
         # IMAGE HOSTING - only credentials are editable

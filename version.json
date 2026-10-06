@@ -1,5 +1,5 @@
 {
-  "version": "23.6.9",
-  "notes": "Adsconex: tu dong retry loi tam thoi (Cloudflare 502 origin_bad_gateway / 503 / 504 / 429 / 520-524) + backoff theo Retry-After (mac dinh 60s, toi da 3 luot). Truoc day POST 1 lan roi bao loi -> mat luot dang (35/124 bai bi 502 ngay 06/10). 500 va 401 KHONG retry de tranh bai trung.",
+  "version": "23.6.10",
+  "notes": "Gioi han toc do dang Adsconex dung chung nhieu may: 6 bai/phut tong (cua so truot 60s + gian cach toi thieu 60/N giay), mutex O_CREAT|O_EXCL tren o Z (RaiDrive), tu gian cach tai may khi Z loi. Va loi HTTP 422 seo_description (chuoi chua '--' bi server tu choi -> lam sach + go truong roi dang lai thay vi mat bai).",
   "date": "2026-10-06"
 }
