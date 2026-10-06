@@ -279,7 +279,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.13"
+APP_VERSION = "23.6.14"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -1008,13 +1008,30 @@ def find_pending_adsconex(output_root) -> list:
         if _adsconex_has_published(work_dir):
             continue
         path = adsconex_pending_path(work_dir)
-        if not path.is_file():
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8") or "{}")
-        except Exception:
-            continue
-        payload = data.get("payload") if isinstance(data, dict) else None
+        payload = None
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8") or "{}")
+            except Exception:
+                data = None
+            if isinstance(data, dict):
+                payload = data.get("payload")
+        else:
+            # Bai loi 401/403 truoc day chi luu publish_payload_adsconex.json +
+            # publish_response_adsconex.json (KHONG co file pending) -> nut "Dang lai"
+            # bo sot hang loat. Doc lai payload do de cuu.
+            # An toan: 401/403 = origin TU CHOI -> bai CHUA duoc tao (da kiem chung 404),
+            # nen dang lai KHONG sinh bai trung.
+            try:
+                rp = work_dir / "publish_response_adsconex.json"
+                pp = work_dir / "publish_payload_adsconex.json"
+                if rp.is_file() and pp.is_file():
+                    resp = json.loads(rp.read_text(encoding="utf-8") or "{}")
+                    code = str((resp or {}).get("http_status", ""))
+                    if code in ("401", "403"):
+                        payload = json.loads(pp.read_text(encoding="utf-8") or "{}")
+            except Exception:
+                payload = None
         if isinstance(payload, dict) and payload.get("content"):
             items.append((work_dir, payload))
     return items

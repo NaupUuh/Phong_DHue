@@ -1,5 +1,5 @@
 {
-  "version": "23.6.13",
-  "notes": "Nut 'Kiem tra token' bao ro khi 401/403: token bi tu choi (blogbio_verify_failed) hoac base URL tro sai host. Truoc do chi hien HTTP 403 kho hieu.",
+  "version": "23.6.14",
+  "notes": "Nut 'Dang lai bai loi' nhat duoc ca bai 403 cu (truoc chi co payload, khong co file pending) -> cuu duoc 87 bai tuong da mat. Them: 403 = bai chua duoc tao (404) nen dang lai KHONG sinh bai trung.",
   "date": "2026-10-07"
 }
