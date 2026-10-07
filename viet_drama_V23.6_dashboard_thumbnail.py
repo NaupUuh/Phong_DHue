@@ -279,7 +279,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.17"
+APP_VERSION = "23.6.18"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -472,6 +472,7 @@ DEFAULT_CONFIG = {
     "vision_parallel_workers": "2",
     "cloudinary_workers": "4",
     "ffmpeg_bin": r"C:\\ffmpeg-9.0.1-essentials_build\\bin",
+    "keep_frames": False,
 }
 
 GUIDE_TEXT = """
@@ -2538,6 +2539,27 @@ class StoryPipeline:
 
         self._step_end("Transcription")
         return "\n".join(transcript_lines), timeline
+
+    def cleanup_frames(self):
+        """Xoá thư mục frames sau khi đã dùng xong (Vision + ảnh bìa).
+
+        Mặc định tool KHÔNG giữ lại ảnh trung gian: mỗi video sinh ra hàng chục
+        khung hình nên chạy nhiều video sẽ rất nặng ổ đĩa. Bật "keep_frames"
+        trong tab Image hosting nếu cần giữ lại để kiểm tra.
+        """
+        if bool(self.cfg.get("keep_frames", False)):
+            return
+        work_dir = getattr(self, "work_dir", None)
+        self.frames = []
+        if not work_dir:
+            return
+        frame_dir = Path(work_dir) / "frames"
+        try:
+            if frame_dir.is_dir():
+                shutil.rmtree(frame_dir, ignore_errors=True)
+                self._log("Dọn dẹp: đã xoá thư mục frames (không lưu ảnh trung gian).")
+        except Exception as exc:
+            self._log(f"WARNING: không xoá được thư mục frames: {exc}")
 
     def sample_frames(self, videos: List[Path], timeline: List[Dict]):
         """Extract more candidates for short clips to maximize image quality."""
@@ -4827,6 +4849,7 @@ Return STRICT JSON only:
         total_took = self._fmt_seconds(time.perf_counter() - self.run_started_at)
         self._log(f"ALL DONE | total runtime {total_took}")
         self.progress(100, f"Done | total {total_took}")
+        self.cleanup_frames()
 
         return {
             "work_dir": str(self.work_dir),
@@ -5716,8 +5739,15 @@ class App(tk.Tk):
             wraplength=950
         ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 4))
 
+        ttk.Checkbutton(
+            img,
+            text=("Giữ lại thư mục frames sau khi chạy (mặc định TẮT: tool tự xoá "
+                  "ảnh trung gian cho nhẹ ổ đĩa)"),
+            variable=self.vars["keep_frames"],
+        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 2))
+
         img_buttons = ttk.Frame(img)
-        img_buttons.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        img_buttons.grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
         ttk.Button(
             img_buttons,
             text="Mở Cloudinary Console",
@@ -6600,6 +6630,8 @@ class App(tk.Tk):
                                     "output": result["work_dir"]}
                         except Exception as exc:
                             batch_log(f"LỖI: {exc}")
+                            if pipeline:
+                                pipeline.cleanup_frames()
                             return {"video": label, "status": "failed", "error": str(exc),
                                     "output": str(pipeline.work_dir) if pipeline and pipeline.work_dir else ""}
                     with ThreadPoolExecutor(max_workers=worker_count) as pool:
@@ -6679,9 +6711,12 @@ class App(tk.Tk):
                                                "titles_path": str(titles_path)}))
                     return
                 pipe = StoryPipeline(cfg, self.log, self.progress)
-                result = pipe.run(sources, auto_publish=bool(cfg.get("auto_publish")))
-                result["_pipeline"] = pipe
-                self.q.put(("done", result))
+                try:
+                    result = pipe.run(sources, auto_publish=bool(cfg.get("auto_publish")))
+                    result["_pipeline"] = pipe
+                    self.q.put(("done", result))
+                finally:
+                    pipe.cleanup_frames()
             except Exception as e:
                 import traceback
                 err = traceback.format_exc()

@@ -1,5 +1,5 @@
 {
-  "version": "23.6.17",
-  "notes": "Fix tool TREO khi dang bai: tran toc do dung chung tren o Z dung mtime cua mark de tinh gian cach -> khi 2 may lech dong ho (do that: lech 45s) mtime nam o TUONG LAI lam since_last am -> vong xin luot lap vo han. Nay: (1) gian cach tinh theo dong ho CUA CHINH MAY, (2) bo qua mark co mtime o tuong lai khi dem cua so, (3) gioi han cho luot toi da 25s roi gian cach tai may thay vi treo vo han.",
+  "version": "23.6.18",
+  "notes": "KHONG luu anh trung gian: sau khi xong (Vision + tao anh bia + dang bai) tool TU XOA thu muc frames trong moi _story_output_* - truoc day giu lai hang chuc khung hinh moi video nen chay nhieu video rat nang o dia. Co o tick 'Giu lai thu muc frames' trong tab Image hosting neu can giu de kiem tra. Don dep chay ca khi video loi (batch) va ca khi bam nut dang bai rieng.",
   "date": "2026-10-07"
 }
