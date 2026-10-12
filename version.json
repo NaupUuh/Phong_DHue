@@ -1,5 +1,5 @@
 {
-  "version": "23.6.5",
-  "notes": "Gom o 'Cau chen trong ten file' xuong tab Kich ban & Prompt, chia 3 o canh nhau: Prompt | Kich ban | Cau chen",
-  "date": "2026-10-05"
+  "version": "23.6.20",
+  "notes": "VA LOI 502 khi dang bai len Adsconex. NGUYEN NHAN GOC (do tren site that): origin co timeout xu ly ~12 giay -> POST nao server can >12s de tao xong chuong thi Cloudflare tra 502 origin_bad_gateway. Yeu to quyet dinh la SO CHUONG trong 1 request, khong phai so ky tu: 1-4 chuong -> 201 (moi kich thuoc toi 75KB); 5 chuong -> 502; 10 chuong -> 502 (11/12 lan); >=20 chuong -> 502 voi moi token. Ban va cu chia theo 36.000 ky tu nen 10 chuong thanh 2 phan 5 chuong -> ca 2 phan van >4 chuong -> van 502 (do la ly do chia nho cu vo hieu). DA VA: (1) chia theo SO CHUONG/request (mac dinh 3, o 'So chuong/lan gui' trong tab Adsconex); (2) adsconex_series_id_for_slug dung GET /api/series/<slug>/posts de tra CHINH XAC - ham cu quet GET /series bi CAT o 5000 dong (site co >10800 series) nen phan 2+ tao series RIENG lam tach chuong; (3) dang TIEP khi do dang: resume tinh theo SO CHUONG, neu da du chuong thi KHONG dang lai (tranh series trung); (4) luu tien do (series_id + so chuong da len) vao file pending, giu lai khi ghi de. DA TEST THAT: truyen 10 chuong/75000 ky tu -> chia 4 request (3+3+3+1) -> 10/10 chuong len dung 1 series, dung thu tu; dang do dang 3/10 roi dang lai -> 10/10 khong trung chuong; 12 request lien tiep 3 chuong/request -> 12/12 = 201.",
+  "date": "2026-10-12"
 }

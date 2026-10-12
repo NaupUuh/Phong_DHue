@@ -1,144 +1,245 @@
-# TIẾP TỤC — Phong_DHue (Video Story Publisher VV23.6)
+# TIẾP TỤC — Phong_DHue
 
-> Đọc file này trước khi sửa tool. Cập nhật lại mỗi khi rời tool.
+**Phiên bản hiện tại: v23.6.20** (cập nhật 2026-10-12)
 
-## Trạng thái hiện tại (2026-10-05)
-- **Version đang chạy:** v23.6.3
-- **Repo GitHub:** https://github.com/NaupUuh/Phong_DHue
-- **Thư mục máy:** `Phong_DHue`
-- **Cách chạy:** bấm đúp `CHAY_Phong_DHue.bat` (hoặc `viet_drama_V23.6_dashboard_thumbnail.py`)
+## Trạng thái: ĐANG CHẠY ỔN
+- File chính: `viet_drama_V23.6_dashboard_thumbnail.py` (**LF-only**, py_compile OK).
+- GitHub + ổ Z đã đồng bộ (12/12 MD5 khớp).
+- **KHÔNG được ghi đè config thật** — test GUI phải so MD5 trước/sau.
 
-## Đã làm xong
-- Tách khỏi tool kia: config / crash log / cache riêng, không ghi đè nhau.
-- `PROFILE_ID = "V23.6"` ở đầu file — đổi 1 dòng này là tách sang profile khác.
-- Đã đưa lên GitHub + cơ chế tự cập nhật (giống News_Clip_Stitcher).
-- Nút **⬆ Cập nhật** ở góc trên bên phải cửa sổ: bấm là tự tải bản mới → ghi đè → mở lại.
-- `Cai_dat_may_moi.bat` cho máy mới (đã test thật: cài đủ 11 file).
-- **Ô "Câu chèn trong tên file"** trong tab Cài đặt: mỗi dòng 1 câu, tool chọn
-  ngẫu nhiên 1 câu thay chuỗi `full story` khi đặt tên file. Để trống → quay về
-  `full story` như bản cũ.
+## v23.6.20 — FIX LỖI 502 KHI ĐĂNG BÀI LÊN ADSCONEX (nguyên nhân gốc đã đo được)
 
-## Tên file video (định dạng)
-```
-<caption>;<câu chèn ngẫu nhiên> <link bài không dấu chấm/slash>.mp4
-```
-Ví dụ thật (đã chạy đúng trên máy):
-```
-She Whispered Come On, Sasha At 2 AM - Then Her Dog Led Her To The Nursery Door
-#SashaTheDog #NurseryNight #DogHero #TwoAM #MotherAndDog;WATCH THE NEXT PART HERE
-httpsdrama.viralstory.bizarticle100989.mp4
-```
-- Giới hạn **219 ký tự** (có từ bản gốc, để an toàn với Windows + ổ mạng).
-- Tên quá dài → cắt bớt tiêu đề. Muốn nới thì sửa hằng số giới hạn trong
-  `safe_video_filename()` — **cần user quyết** (219 an toàn / 240 đủ ví dụ dài).
+**Triệu chứng:** mọi bài 10 chương đều `Adsconex HTTP 502 origin_bad_gateway` sau ~12s, dù payload đúng, token đúng, host đúng.
 
-## Cơ chế tự cập nhật (đã test thật, PASS)
-| File | Việc |
+**Nguyên nhân gốc (đo trên site thật, không suy đoán):** origin có **timeout xử lý ~12 giây**.
+POST nào server cần >12s để tạo xong chương → Cloudflare trả 502. Yếu tố quyết định là
+**số chương trong 1 request**, không phải số ký tự:
+
+| Request | Kết quả đo được |
 |---|---|
-| `version.json` | version + notes + date (nguồn so sánh) |
-| `updater.py` | tải zip GitHub → giải nén → ghi đè → backup `_backup_update/` |
-| `release.py` | phát hành bản mới: `python release.py <ver> "<mô tả>"` |
-| `_backup_update/` | backup tự động trước mỗi lần ghi đè (có thể rollback) |
+| 1–4 chương (mọi kích thước tới 75KB) | **201**, 4–12s |
+| 5 chương | **502** |
+| 10 chương | **502** (11/12 lần) |
+| ≥20 chương | **502** với mọi token |
 
-**Khi có bản mới, máy khác chỉ cần:** mở tool → bấm **⬆ Cập nhật**.
+Số ký tự **không** phải giới hạn thật: 1 request 75KB/10 chương → 201 khi origin khoẻ;
+75KB/4 chương → 201 liên tục. Nên bản vá cũ (chia theo 36.000 ký tự) chia 10 chương thành
+2 phần 5 chương — **cả 2 phần vẫn >4 chương → vẫn 502**. Đó là lý do "chia nhỏ" cũ vô hiệu.
 
-### Bẫy đã gặp: cache version.json của GitHub
-`contents?ref=main` và `raw.githubusercontent` đều có thể trả bản CŨ vài giây
-sau khi push → bấm Cập nhật ngay sẽ báo "đang là bản mới nhất" (SAI).
-**Đã sửa:** updater hỏi commit mới nhất có đụng `version.json`, rồi đọc
-`version.json` **ở đúng commit đó** (`?ref=<sha>`) — nội dung theo sha là bất
-biến, không dính cache. Chỉ khi cách này lỗi mới rơi về 2 cách cũ.
+**Bằng chứng phụ:** token trong config (`Hue6789` / Viral Heat Drama) luôn 502 với ≥5 chương;
+token của `admin` cùng payload → 201. Tầng verify xử lý token của user chậm hơn hẳn.
+→ Vẫn nên đổi token admin nếu có, nhưng **không cần thiết** sau bản vá.
 
-### Phát hành bản mới (làm trên máy này)
-```
-cd Phong_DHue
-python release.py 23.7.0 "Mô tả thay đổi"
-```
-Script tự: kiểm tra version lớn hơn → ghi `version.json` → ghi `APP_VERSION` → commit → push.
+**Đã vá:**
+1. `adsconex_split_chunks(content, max_chars, max_chapters)` — thêm giới hạn **số chương**
+   (mặc định 3/request, ô "Số chương/lần gửi" trong tab Adsconex).
+2. `adsconex_series_id_for_slug()` — đổi sang `GET /api/series/<slug>/posts` (tra CHÍNH XÁC,
+   ~1.5s). Hàm cũ quét `GET /series` vốn bị **cắt ở 5000 dòng** (site có >10.800 series) →
+   series mới không bao giờ thấy → phần 2+ tạo **series riêng, chương bị tách**.
+3. `_adsconex_send_all(payload, resume)` — đăng TIẾP khi dở dang. `resume` tính theo
+   **SỐ CHƯƠNG** (không phải số phần). Nếu đã đủ chương → **không đăng lại** (tránh series trùng).
+4. `adsconex_write_pending(..., extra=...)` — lưu `series_id` + số chương đã lên; giữ lại
+   tiến độ của bản ghi cũ khi ghi đè (trước đây bị mất → đăng lại từ đầu → trùng chương).
+5. `find_pending_adsconex()` trả `(work_dir, payload, resume)`; dùng `adsconex_series_info()`
+   để biết series đã có bao nhiêu chương thật trên site.
+6. `adsconex_series_exists()` — kiểm tra chính xác theo slug, tránh đăng lại bài đã live.
 
-## Đường dẫn tài nguyên (đã tách, KHÔNG dùng chung với tool kia)
-- Config: `C:\Users\<user>\.video_story_publisher_V23.6.json`
-- Crash log: `Phong_DHue\video_story_publisher_crash_V23.6.log`
-- Cache: `%LOCALAPPDATA%\VideoStoryPublisher\V23.6\`
+**Đã test THẬT (không dùng response giả):**
+- Truyện 10 chương / 75.000 ký tự → chia **4 request (3+3+3+1)** → **10/10 chương lên đúng 1 series**,
+  đúng thứ tự chapter 1→10. `GET /api/series/<slug>/posts` → `total=10`.
+- **Đăng dở dang rồi đăng tiếp** (test kỹ nhất, có 2 vòng sửa lỗi):
+  đăng 4/10 chương → ghi pending → "Đăng lại bài lỗi" → **10/10 chương, giữ NGUYÊN series cũ,
+  đúng thứ tự 1→10, KHÔNG trùng chương**.
+  - Lỗi đã bắt được khi test: khi đăng tiếp, chunk ĐẦU TIÊN không mang `series_id` → server
+    **tạo series mới** cho nó, các chunk sau mới gộp vào series cũ → site ra 7 chương và
+    chương 5–7 mang **tên của chương 8–10**. Đã vá: khi đăng tiếp, **mọi** chunk (kể cả chunk 1)
+    đều phải mang `series_id`; không lấy được thì DỪNG, không gửi.
+- Bài đã đủ chương → không gửi gì, không tạo series trùng (đã kiểm tra lại trên site: vẫn 10 chương).
+- 12 request liên tiếp 3 chương/request → **12/12 = 201** (0 lỗi).
 
-## Việc còn lại
-- **ĐÃ QUYẾT (2026-10-05): GIỮ giới hạn 219 ký tự** — user chọn an toàn với Windows
-  + ổ mạng, chấp nhận việc tool cắt bớt tiêu đề khi quá dài. **KHÔNG nới lên 240.**
-  Đừng đề xuất lại trừ khi user hỏi.
-- **ĐÃ QUYẾT (2026-10-05): KHÔNG mã hoá / không che code.** User đã cân nhắc và
-  bỏ qua. Đã test thật: PyArmor trial **KHÔNG** làm nổi file 266 KB (`out of
-  license`, giới hạn ~32 KB); `.pyc` dễ dịch ngược; đóng gói `.exe` sẽ **làm chết
-  nút Cập nhật** (updater ghi file `.py` rồi chạy lại `sys.executable + .py`).
-  Repo vẫn để **public** như hiện tại. **Đừng đề xuất lại** trừ khi user hỏi.
-- **Chưa rõ nguyên nhân:** file config ADung từng bị ghi đè thành 3 khoá
-  (`vilao_api_key` giả `KEY_THAT_CUA_ANH`, `site_id`, `category`) lúc 10:43.
-  Config đã tự khôi phục đủ 58 khoá + key thật. Không phải do test của mình.
-  Nếu gặp lại: kiểm tra ngay file config trước khi chạy tool.
+## BẢN GẦN ĐÂY
+| Bản | Nội dung |
+|---|---|
+| v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
+| v23.6.16 | Port phần đăng bài Adsconex sang bản DHue (theo đúng file anh gửi, KHÔNG sửa logic riêng) |
+| v23.6.17 | **Fix TREO khi đăng bài do LỆCH ĐỒNG HỒ** (3 lớp: giờ máy, bỏ mark tương lai, chờ tối đa 25s) |
+| v23.6.19 | **Vá crash PATH** — `configure_ffmpeg()` chỉ thêm ffmpeg vào PATH 1 lần (trước: mỗi video thêm 1 lần → nổ `ValueError` ở ~lần 454) |
+| v23.6.18 | **Không lưu thư mục frames** — tự xoá ảnh trung gian; có ô tick "Giữ lại thư mục frames" |
 
-## Bằng chứng tool chạy ĐÚNG (lần chạy thật 11:44–11:50 ngày 05/10)
-Output: `Z:\HQData-2\dũng dùng drama\AQ test\test\Story Outputs\`
-- 2/3 video: `status: success`, bài **đã lên net thật** (HTTP 200):
-  - `/article/100989` (slug `you-saved-us-the-dog-that-knew`)
-  - `/article/100990` (slug `my-son-came-home-black-sedan-fifty-years`)
-- Cả 2 file video **đã được đổi tên đúng định dạng** trong folder nguồn.
-- 1/3 video: `failed` do server đăng bài trả **502/504 Bad Gateway** (lỗi phía
-  máy chủ, KHÔNG phải lỗi tool). Gặp lại thì chạy lại video đó.
-- Lưu ý: `chapter_verified: false` trong `publish_result.json` — cần xem lại nếu
-  user phàn nàn bài không phân chương.
-- Crash log chỉ có 2 dòng `open_output` FileNotFoundError (bấm "Mở output" khi
-  thư mục trên ổ Z đã bị xoá) — không ảnh hưởng pipeline.
+## Việc vừa xong (v23.6.14) — BỎ HOST CHẾT + VÁ 401/403
+
+**Nguyên nhân gốc lỗi 403 `blogbio_verify_failed` (đã chốt bằng thực nghiệm):**
+Tool có **host chết `usjusticereport.cfx.bz`** làm mặc định. Host này CHẾT THẬT:
+- `GET /` → 200 (site tĩnh còn sống) NHƯNG mọi endpoint `/api/*` → **403 `blogbio_verify_failed` / `verify_status:502`** với MỌI token (kể cả token đúng).
+- Cùng token đó bắn vào `dramanest.gigglelo.com` → **200**.
+→ Máy nào chạy với config trống/mặc định sẽ trỏ vào host chết → 403 toàn bộ.
+
+**Cách ly bằng chứng:** cùng 1 token: `dramanest.gigglelo.com` GET 200 / POST 422; `usjusticereport.cfx.bz` GET 403 / POST 403. Token rác cũng ra 403 y hệt ⇒ lỗi này là **host/tầng verify**, nhìn 403 KHÔNG phân biệt được token sai hay host chết.
+
+### Đã vá
+1. **Bỏ hẳn host chết** (12 chỗ) → `dramanest.gigglelo.com`. Chỉ dùng host điền trong tool.
+2. **Vá 401/403:** token bị từ chối → **LƯU payload** để đăng lại (trước đây 42 bài 403 **mất trắng**), kèm thông báo rõ nguyên nhân. An toàn: bài 403 đã kiểm chứng KHÔNG hề được tạo (404) → đăng lại không sinh trùng.
+
+### Việc còn lại cho máy lỗi
+- Bấm "⬆ Cập nhật", hoặc sửa tab Adsconex: base URL = `https://dramanest.gigglelo.com/api`, site host = `dramanest.gigglelo.com`.
+- Bấm **"Kiểm tra token"** (phải OK) → **"Đăng lại bài lỗi"**.
+
+## Việc vừa xong (v23.6.14) — TỐI ƯU TỈ LỆ ĐĂNG ĐƯỢC BÀI
+
+Bối cảnh: hôm 06/10 có khung giờ **73–88% bài bị 502** (12:20–17:15), 97 bài lỗi.
+Nguyên nhân đã chốt: **Cloudflare `origin_bad_gateway`** trên zone `dramanest.gigglelo.com`
+— origin quá tải **tức thời**, KHÔNG phải payload/tool/rate. Bằng chứng: 12/12 payload từng
+502 replay lại → **201 OK 1.2–1.6s**; 10 POST nặng đồng thời → 201 cả 10; 107 bài 201 cùng ngày.
+
+**Vấn đề thật sự làm "mất thời gian":** retry 3 lần × backoff 60/120s ≈ **4 phút/bài lỗi**.
+100 bài lỗi = ~6 giờ chờ, mà origin sập hàng giờ thì chờ vài phút không cứu được bài nào.
+
+### 1. Lưu payload khi lỗi → tự đăng lại sau (MỚI)
+- Gặp `502/503/504/429/520–524` hoặc lỗi mạng → ghi `publish_pending_adsconex.json` vào
+  `work_dir` (chứa payload + http_status + detail + saved_at + machine).
+- **KHÔNG tốn Vision/Writer** — chỉ gửi lại đúng payload đã lưu.
+- Đăng lại thành công → tự xoá dấu pending + tự ghi `publish_result.json` + `chapter_links.txt`
+  + **tự đổi tên video** (đọc lại `story.json` + `source_video.json`).
+- **An toàn, không sinh bài trùng:** 12/12 bài 502 trước đó đều trả `404` → 502 nghĩa là
+  **chưa hề tạo bài**.
+
+### 2. Tự đăng lại ở cuối batch (MỚI)
+- Sau khi batch chạy xong, tool quét `Story Outputs`, đăng lại mọi bài còn pending.
+- Cập nhật lại `rows` (bài lỗi → thành công) nên `batch_result_*.json` + `net_titles_*.txt`
+  phản ánh đúng.
+- **Dừng sớm:** 3 bài liên tiếp vẫn lỗi → dừng (origin chưa hồi), giữ nguyên payload cho lần sau.
+- Bỏ qua folder **đã đăng thành công** (`publish_result.json` có url/id).
+
+### 3. Nút "Đăng lại bài lỗi" trong tab Adsconex (MỚI)
+- Chọn folder batch ở ô đường dẫn → bấm nút → xác nhận → chạy nền.
+- Kiểm tra trước: net phải là Adsconex + phải có token; báo rõ số bài tìm thấy.
+- Xong hiện hộp thoại: thành công bao nhiêu, còn lỗi bao nhiêu (bấm lại sau vài phút).
+
+### 4. Circuit breaker — cắt cơn chờ vô ích (MỚI)
+- **2 bài lỗi tạm thời LIÊN TIẾP** → các bài sau **chỉ thử 1 lần** rồi lưu payload luôn.
+- Biến đếm là **trạng thái chung cả tiến trình** (`_adsconex_fail_streak` + Lock), KHÔNG phải
+  thuộc tính instance — vì batch tạo `StoryPipeline` mới cho mỗi video, dùng instance sẽ bị reset.
+- Thành công → streak về 0. Chỉ `502/503/504/429/520–524` + lỗi mạng mới tính là lỗi;
+  **422/401/500 KHÔNG** kích breaker.
+
+### 5. Retry 502 (từ v23.6.9, vẫn giữ)
+- Retry `502/503/504/429/520–524` + lỗi mạng, backoff theo `Retry-After` (mặc định 60s,
+  tối đa 3 lượt, trần 300s). `500`/`401` **KHÔNG** retry.
+
+### 6. Các bản vá cũ vẫn giữ
+- **Rate-limit 6 bài/phút tổng** cho mọi máy (mutex `O_CREAT|O_EXCL` trên Z) — v23.6.10.
+- **Vá 422 `seo_description`** (chuỗi chứa `--`): làm sạch + gỡ trường rồi đăng lại — v23.6.10.
+
+## Cấu trúc code (quan trọng khi sửa tiếp)
+
+- `_adsconex_send(payload)` — tách ra thành method riêng: POST + retry + xin lượt + đếm breaker.
+  **Trả `(r, data, payload)`, KHÔNG raise** — caller tự quyết định theo `r.status_code`
+  (`r is None` = lỗi mạng sau khi hết lượt thử).
+- `publish_adsconex()` và `republish_pending()` **dùng chung** `_adsconex_send`.
+- `publish_adsconex` khi lỗi tạm thời → `adsconex_write_pending` rồi `raise RuntimeError`
+  (để batch ghi nhận bài lỗi như cũ).
+
+## Test đã chạy (PASS)
+
+- **7/7 test DHue** (dùng response giả, KHÔNG tạo bài rác trên site thật):
+  1. pending roundtrip (ghi/đọc/xoá) OK.
+  2. đăng lại thành công 201 → có url, ghi `publish_result.json`, xoá pending, 1 POST.
+  3. 502 rồi hồi → retry trong cùng bài → 201, streak về 0.
+  4. origin sập: bài 1–2 = 2 call/6.6s → **bài 3–4 = 1 call/1.6s**, payload đều được lưu.
+  5. folder **đã đăng thành công** bị bỏ qua khi quét pending.
+  6. 422 `seo_description` → gỡ trường → 201; **422 không kích breaker**.
+  7. lỗi mạng → lưu payload.
+- **ADung v22.100.8:** đăng lại thật lên site → **HTTP 201, 10 chapters, 4.7s**;
+  `GET /posts/<slug>` → **200**; 4/4 bài đăng lại thành công.
+- `py_compile` OK cả 2; CRLF giữ nguyên (**6864 CRLF / 0 LF-only**).
 
 ## Lệnh hay dùng
-```
-# chạy tool
-Phong_DHue\CHAY_Phong_DHue.bat
 
-# kiểm tra có bản mới không (không mở GUI)
-python updater.py
+```bash
+PY="C:/Users/Admin/AppData/Local/Programs/Python/Python313/python.exe"
+cd /c/Users/Admin/Desktop/Phong_DHue
 
-# cập nhật bằng dòng lệnh (không cần mở GUI)
-python updater.py --apply
+# Phát hành bản mới (tự commit + push)
+"$PY" release.py 23.6.X "mo ta"
 
-# phát hành bản mới
-python release.py 23.7.0 "Mô tả"
+# Sync ổ Z (đối chiếu MD5)
+"$PY" sync_z.py
 
-# đồng bộ lên ổ Z
-python sync_z.py
+# Kiểm tra cú pháp sau khi sửa
+"$PY" -m py_compile viet_drama_V23.6_dashboard_thumbnail.py
 ```
 
-### Fix 2026-10-05 (v23.6.5) — GOM O "CAU CHEN" VAO TAB KICH BAN & PROMPT
-- **Yeu cau:** o "Cau chen trong ten file" nam rieng o vung Source lam trang cao. Gom xuong tab
-  "Kich ban & Prompt" thanh **3 o canh nhau**.
-- **Cach lam:** xoa label+editor khoi `source`; them `phrase_panel` (LabelFrame "Câu chèn trong
-  tên file") vao `prompt_tab` column=2 + `columnconfigure(2, weight=1, uniform="editors")`.
-  `script_panel` padx `(5,0)` -> `(5,5)`. Editor height 6, width 32.
-- **Giu nguyen bien:** `self.filename_phrase_editor`; save `cfg["filename_phrase_list"]` khong doi.
-- **Chieu cao:** notebook prompt_tab = 190, panel h=180, reqh ~160 => khong bi cat (do bang `probe_h.py`).
-- **Test:** `smoke_3panel_dhue.py` — 3 panel cot 0/1/2, mapped, save roundtrip dung.
-- **Luu y CRLF:** file CRLF; `patch` khoi dai hay truot — cat nho tung khoi.
+## Việc còn lại / lưu ý
 
-### Fix 2026-10-05 (v23.6.4) — CON LAN CHUOT
-- **Trieu chung:** lan chuot o vung nen (ngoai cac o nhap) KHONG cuon trang; chi cuon duoc khi
-  tro nam trong o Text/Listbox. Phai keo thanh truot tay moi xuong duoc.
-- **Nguyen nhan:** `tk.Canvas` KHONG tu an su kien `<MouseWheel>` (khac `Text`/`Listbox`).
-  Trang chi cuon duoc neu tro tinh co nam tren widget co scroll rieng -> vung nen chet.
-- **FIX (3 phan):**
-  1. Luu canvas: `self.content_canvas = canvas` (dong ~4059).
-  2. `self.bind_all("<MouseWheel>", self._on_mousewheel, add="+")` (dong ~4075).
-  3. Them `_on_mousewheel()` + `_scroll_content()` (~dong 5248):
-     - `winfo_containing()` -> di nguoc chuoi `master`; gap `Text`/`Listbox` -> `return None`
-       (nhuong quyen cho o do tu cuon).
-     - Chi cuon khi diem nam TRONG `content_canvas` (chan `bind_all` cuon nham khi popup mo).
-     - `winfo_containing()` tra `None` -> fallback so sanh toa do voi khung canvas.
-     - Het scroll (`first<=0 and last>=1`) -> `return None`, khong an su kien vo ich.
-- **BAI HOC:** moi `tk.Canvas` lam khung cuon deu PHAI bind `<MouseWheel>` thu cong;
-  dung `bind_all` + kiem tra widget duoi con tro de khong giat quyen cua `Text`/`Listbox`.
-- Da test: ngoai o nhap (xuong+len) OK, trong Text nhuong quyen OK,
-  trong popup khong cuon canvas chinh OK, khong crash log.
-- Da release v23.6.4 + sync Z 12/12 MD5 khop.
+- **Chưa test end-to-end POST thật** cho DHue v23.6.14 (test bằng response giả để không tạo
+  bài rác). Lần chạy batch tới xem log có dòng `Adsconex xin luot dang:` không.
+- **Mỗi máy phải dùng 1 folder riêng** — 2 máy cùng đăng 1 folder sẽ đăng trùng.
+- Nếu Z không kết nối được, tool **chỉ giãn cách tại máy** (15s) → nhiều máy có thể vượt trần chung
+  (hành vi có chủ đích, không chặn việc).
+- Backup bản cũ nằm trong `_backup_old/` (đuôi `.bak`).
+- **File này dùng CRLF** — patch phải giữ CRLF. Lưu ý: `Path.read_text()` tự dịch CRLF→LF nên
+  **đếm bằng `read_text()` sẽ ra 0 CRLF sai**; phải dùng `io.open(..., newline="")`.
 
-## Lưu ý
-- API key (Vilao / ElevenLabs / Gemini) **chỉ nhập trong ô GUI**, KHÔNG đọc từ `.env`, KHÔNG hardcode trong file.
-- Config **không** bị cập nhật ghi đè — `updater.py` chỉ ghi đè file thuộc repo.
-- Máy mới: chạy `Cai_dat_may_moi.bat` trước, sau đó chỉ cần bấm nút Cập nhật.
-- Tool dùng chung `site_id` / API key với tool kia (do copy config) nhưng KHÔNG ghi đè nhau.
+## Bản vá đã dùng
+
+- `%LOCALAPPDATA%\Temp\ads502\patch_scripts\DHue\_patch502.py` (port từ ADung, 10 điểm).
+- Test: `%LOCALAPPDATA%\Temp\ads502\test_dhue.py`.
+
+
+## 2026-10-07 (moi) - Fix Mo_An.vbs
+- LOI: 'Microsoft VBScript compilation error: Expected end of statement' tai dong 20
+  khi double-click Mo_An.vbs.
+- NGUYEN NHAN: VBScript KHONG co escape \" nhu C/JS. Muon 1 dau " trong chuoi phai
+  viet "" (gap doi).
+  SAI : sh.Run """ & bat & """ hidden", 0, False
+  DUNG: sh.Run """" & bat & """", 0, False
+- DA TEST: cscript //nologo -> exit 0, goi dung .bat (tao marker). Da push GitHub.
+- Neu gap lai loi nay o may khac: chay updater.py hoac chep de Mo_An.vbs ban moi.
+
+
+## 2026-10-07 (moi) - Port fix dang bai tu ADung sang DHue (v23.6.16)
+- DHue truoc chi co fix Mo_An.vbs; phan dang bai van la ban CU (chi nhat 401/403,
+  khong chia nho request, khong chong dang trung).
+- Da port 7 thay doi tu ADung:
+  1. adsconex_split_chunks()          - chia content theo moc '<p>CHAPTER N - ...</p>'
+  2. _adsconex_payload_slug()         - lay slug tu permalink
+  3. _adsconex_headers(cfg)           - header Chrome dung chung
+  4. adsconex_series_id_for_slug()    - lay series_id de gop cac phan vao 1 series
+  5. adsconex_existing_slugs()        - GET /series -> tranh dang trung
+  6. StoryPipeline._adsconex_send_all - gui nhieu phan, phan 2+ kem series_id,
+     phan loi -> tra payload GOC de luu lai dang lai
+  7. find_pending_adsconex(output_root, cfg) - nhat ca 502/503/504/429/network
+- publish_adsconex + republish_pending: doi self._adsconex_send -> _adsconex_send_all
+- 2 cho goi find_pending_adsconex: truyen them cfg
+- Sua them: nut 'Lay link site' (https://https://) va NameError lambda _update_fail
+- DA TEST THAT (khong phai doc code): chia 3/6/12 chuong -> ghep lai KHOP content goc,
+  moi phan <=36000, phan 2+ co series_id; loi phan 3/6 -> tra payload goc;
+  find_pending nhat dung 502 cu + 403 cu, bo qua bai da dang/200/422/da-live.
+- Backup ban cu: _backup_old/viet_drama_V23.6_dashboard_thumbnail.py.v23.6.15.bak
+
+
+## 2026-10-07 - FIX TOOL TREO khi dang bai (LECH DONG HO) - v22.100.13 / v23.6.17
+Trieu chung: log dung ngay sau dong "Adscene phan 2/2 | 29139 ky tu", tool treo >7 phut
+khong bao loi. KHONG phai loi mang/origin.
+
+NGUYEN NHAN GOC: tran toc do dang dung chung tren o Z tinh gian cach bang mtime cua file
+mark. Hai may lech dong ho (do that: 45 giay) -> mtime cua mark do may kia ghi nam o
+TUONG LAI so voi dong ho may nay -> `since_last = now - max(inside)` AM -> wait_s luon lon
+-> `_adsconex_take_shared_slot` lap `while True` mai mai -> TREO vinh vien.
+Chung minh: goi thang `_adsconex_claim_slot` tren o Z that -> luon tra ("wait", ~50s).
+
+DA VA (3 lop):
+1. Gian cach tinh theo DONG HO CUA CHINH MAY (`_adsconex_local_last_post`), khong dung
+   mtime cua mark (khong so sanh duoc giua cac may).
+2. Bo qua mark co mtime o TUONG LAI khi dem cua so (khong keo ve now, khong xoa).
+3. `_adsconex_take_shared_slot` gioi han cho toi da 25s (ADSCONEX_RATE_SLOT_WAIT_MAX)
+   -> qua han thi tra "fallback" (gian cach tai may) thay vi treo vo han.
+
+DA TEST THAT tren o Z (khong phai doc code):
+- Truoc va: claim_slot luon ("wait", 40-55s), take_shared_slot treo vo han.
+- Sau va: xin duoc luot trong 0.2-13s; mo phong 8 mark toan bo o tuong lai +45s -> xin
+  luot trong 0.00s, khong treo.
+
+Luu y moi truong: dong ho may em (Ken-Physical-Server) tung CHAM 45s; da bat w32time
+(`sc config w32time start= auto` + `net start w32time` + `w32tm /resync`) -> lech +0.1s.
+NEN dong bo dong ho tren MOI may chay tool.
