@@ -1,8 +1,18 @@
 # TIẾP TỤC — Phong_DHue
 
-**Phiên bản hiện tại: v23.6.14** (06/10/2026)
+**Phiên bản hiện tại: v23.6.18** (cập nhật 2026-10-12)
 
 ## Trạng thái: ĐANG CHẠY ỔN
+- File chính: `viet_drama_V23.6_dashboard_thumbnail.py` (**LF-only**, py_compile OK).
+- GitHub + ổ Z đã đồng bộ (12/12 MD5 khớp).
+- **KHÔNG được ghi đè config thật** — test GUI phải so MD5 trước/sau.
+
+## BẢN GẦN ĐÂY
+| Bản | Nội dung |
+|---|---|
+| v23.6.16 | Port phần đăng bài Adsconex sang bản DHue (theo đúng file anh gửi, KHÔNG sửa logic riêng) |
+| v23.6.17 | **Fix TREO khi đăng bài do LỆCH ĐỒNG HỒ** (3 lớp: giờ máy, bỏ mark tương lai, chờ tối đa 25s) |
+| v23.6.18 | **Không lưu thư mục frames** — tự xoá ảnh trung gian; có ô tick "Giữ lại thư mục frames" |
 
 ## Việc vừa xong (v23.6.14) — BỎ HOST CHẾT + VÁ 401/403
 
