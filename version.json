@@ -1,5 +1,5 @@
 {
-  "version": "23.6.18",
-  "notes": "KHONG luu anh trung gian: sau khi xong (Vision + tao anh bia + dang bai) tool TU XOA thu muc frames trong moi _story_output_* - truoc day giu lai hang chuc khung hinh moi video nen chay nhieu video rat nang o dia. Co o tick 'Giu lai thu muc frames' trong tab Image hosting neu can giu de kiem tra. Don dep chay ca khi video loi (batch) va ca khi bam nut dang bai rieng.",
-  "date": "2026-10-07"
+  "version": "23.6.19",
+  "notes": "VA LOI: 'ValueError: the environment variable is longer than 32767 characters'. configure_ffmpeg() truoc day prepend thu muc ffmpeg vao PATH MOI LAN goi - ma ham nay duoc goi lai cho TUNG video (moi StoryPipeline), nen chay batch nhieu video thi PATH phinh dan roi no (da gap that: no o lan goi thu ~454). Nay chi them 1 lan duy nhat (kiem tra da co trong PATH chua) va bat ValueError de khong bao gio crash. ffmpeg van duoc tim thay vi exe_path() dung duong dan tuyet doi.",
+  "date": "2026-10-12"
 }
