@@ -364,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.29"
+APP_VERSION = "23.6.30"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -654,6 +654,38 @@ FIRST_PERSON_MARKERS = {
 
 # Ngon ngu khong dan cach bang dau cach -> do do dai bang KY TU, khong phai "tu".
 NO_SPACE_LANGUAGES = {"Japanese", "Korean", "Chinese", "Thai"}
+
+# Ngon ngu "pro-drop": nguoi ke thuong BO dai tu ("Todavia recuerdo..." thay vi
+# "Yo todavia recuerdo..."). Chi kiem dai tu la se loai oan caption dung.
+# Them dong tu ngoi thu nhat de nhan dien.
+FIRST_PERSON_VERBS = {
+    "Spanish": [
+        "recuerdo", "conduje", "supe", "vi", "dije", "tenia", "estaba", "fui", "era",
+        "se", "creo", "quiero", "puedo", "debo", "pienso", "siento", "mire", "llegue",
+        "quede", "conte", "descubri", "decidi", "llame", "oi", "escuche", "entendi",
+        "pense", "hable", "tome", "deje", "volvi", "sali", "entre", "perdi", "encontre",
+        "empece", "termine", "espere", "necesite", "pude", "tuve", "hice", "vine",
+        "puse", "traje", "sabia", "queria", "podia", "hacia", "decia", "veia", "venia",
+        "tengo", "hago", "veo", "vengo", "digo", "pongo", "conozco", "entiendo",
+    ],
+    "Italian": [
+        "ricordo", "sapevo", "vidi", "dissi", "avevo", "ero", "so", "credo", "voglio",
+        "posso", "devo", "penso", "sento", "guardai", "arrivai", "restai", "raccontai",
+        "scoprii", "decisi", "chiamai", "udii", "ascoltai", "capii", "pensai", "parlai",
+        "presi", "lasciai", "tornai", "uscii", "entrai", "persi", "trovai", "iniziai",
+        "finii", "aspettai", "ebbi", "feci", "venni", "misi", "portai", "conosco",
+    ],
+    "Portuguese": [
+        "lembro", "conduzi", "soube", "vi", "disse", "tinha", "estava", "fui", "era",
+        "sei", "creio", "quero", "posso", "devo", "penso", "sinto", "olhei", "cheguei",
+        "fiquei", "contei", "descobri", "decidi", "chamei", "ouvi", "escutei", "entendi",
+        "pensei", "falei", "tomei", "deixei", "voltei", "sai", "entrei", "perdi",
+        "encontrei", "comecei", "terminei", "esperei", "precisei", "pude", "tive",
+        "fiz", "vim", "pus", "trouxe", "sabia", "queria", "podia", "fazia", "dizia",
+        "via", "vinha", "tenho", "faco", "vejo", "venho", "digo", "conheco", "entendo",
+    ],
+}
+
 
 # Cau nhac viet lai caption, dich theo ngon ngu.
 CAPTION_REWRITE_NOTE = {
@@ -4457,6 +4489,14 @@ Return STRICT JSON only:
             marker_re = re.compile("|".join(re.escape(m) for m in markers), flags=re.I)
             opening = caption.split("\n\n", 1)[0]
             hits = marker_re.findall(caption)
+            # Ngon ngu pro-drop: nhan them dong tu ngoi thu nhat (bo dau de so sanh).
+            verbs = FIRST_PERSON_VERBS.get(lang_key) or []
+            if verbs:
+                plain = "".join(ch for ch in caption.lower()
+                                if ch.isalnum() or ch.isspace())
+                verb_hit = any(re.search(r"\b" + re.escape(v) + r"\b", plain) for v in verbs)
+            else:
+                verb_hit = False
             # Tieng Nhat/Han/Thai khong dan cach bang dau cach -> dem ky tu thay vi "tu".
             if lang_key in NO_SPACE_LANGUAGES:
                 length_ok = 200 <= len(caption) <= 4000
@@ -4468,9 +4508,17 @@ Return STRICT JSON only:
                     r"screen went black|hard cut|the video ends|the viewer", caption, flags=re.I)
             else:
                 no_camera = True
+            # "Mo dau bang ngoi thu nhat": xet 2 doan dau (khong chi doan 1) de
+            # khong loai oan ngon ngu pro-drop / cau mo dau ngan.
+            head = "\n\n".join(caption.split("\n\n")[:2])
+            opens_first_person = bool(marker_re.search(head)) or (
+                bool(verbs) and any(
+                    re.search(r"\b" + re.escape(v) + r"\b",
+                              "".join(ch for ch in head.lower() if ch.isalnum() or ch.isspace()))
+                    for v in verbs))
             if (caption and length_ok and caption.count("\n\n") >= 4
                     and len(hits) >= 4
-                    and marker_re.search(opening)
+                    and opens_first_person
                     and no_camera):
                 # Chuan hoa cau ket ve dung CTA cua ngon ngu da chon; bo moi CTA
                 # cu (ke ca tieng Anh) neu model lo giu lai.
