@@ -25,11 +25,26 @@ IMPORTANT
 import os
 import errno
 
-# Limit native CPU library thread pools before importing NumPy/OpenCV/Whisper.
-# Each video already has parallel work; unbounded native threads can exhaust RAM.
-os.environ.setdefault("OMP_NUM_THREADS", "2")
-os.environ.setdefault("MKL_NUM_THREADS", "2")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
+# KHONG dat OMP_NUM_THREADS / MKL_NUM_THREADS / OPENBLAS_NUM_THREADS o day.
+#
+# Do that tren may nay (Xeon E5-2673 v3, 48 logical CPU, video 30s, model small):
+#   khong dat gi                     -> 28s   <-- nhanh nhat
+#   OPENBLAS_NUM_THREADS=2           -> 106s  (cham 3.8x)
+#   OMP_NUM_THREADS=2                -> 145s  (cham 5x)
+#   OMP=12 -> 141s | OMP=16 -> 110s
+# => CHI CAN dat mot trong cac bien nay la ctranslate2 chuyen sang duong song song
+# kem hon va Whisper cham gap 4-5 lan. Ban cu dat ca 3 bien = 2 nen tool "dung" rat
+# lau o buoc Transcribing (de bi tuong la treo).
+# Cach dung: de nguyen cac bien moi truong, dieu khien so thread bang tham so
+# cpu_threads cua WhisperModel (xem _WHISPER_CHILD).
+
+# Ep OFFLINE truoc MOI import: ensure_packages() o duoi co import faster_whisper,
+# va huggingface_hub doc bien nay NGAY LUC import (khong doc lai sau). Neu de muon
+# thi faster-whisper kiem tra huggingface.co moi lan nap model -> do that: nap
+# model "small" mat 172s khi con cho mang, chi 3.4s khi HF_HUB_OFFLINE=1.
+# Model da nam san trong cache C:\Users\<user>\.cache\huggingface.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 # V20: hide the black console window on Windows when the tool is opened normally.
 # The GUI remains visible. If you need debugging, run with --show-console.
@@ -180,6 +195,47 @@ def ensure_packages():
         ]
         subprocess.check_call(cmd)
 
+    def pip_install_pinned(spec):
+        """Cai DUNG phien ban (khong --upgrade) - dung cho cac goi phai khoa."""
+        print(f"[SETUP] Pinning: {spec}")
+        cmd = [
+            sys.executable, "-m", "pip", "install",
+            "--disable-pip-version-check",
+            "--no-input",
+            spec
+        ]
+        subprocess.check_call(cmd)
+
+    def module_version(module_name):
+        try:
+            mod = importlib.import_module(module_name)
+            return str(getattr(mod, "__version__", "") or "")
+        except Exception:
+            return ""
+
+    def ensure_ctranslate2():
+        """Khoa ctranslate2 ve ban CHAY DUOC.
+
+        ctranslate2 4.6.1 -> 4.8.2 CRASH native `access violation` ngay khi nap model
+        Whisper (do that tren may nay: ca 7 ban deu crash; 4.6.0 on dinh 8/8 lan).
+        faster-whisper chi doi `ctranslate2<5,>=4.0` nen neu no duoc cai lai (hoac ai do
+        chay `pip install -U faster-whisper`) pip se keo ve ban MOI nhat = ban crash.
+        Vi vay: neu thay ban KHAC 4.6.0 thi cai lai dung 4.6.0, va keo setuptools<81
+        (ct2 4.6.0 can pkg_resources).
+        """
+        target = "4.6.0"
+        current = module_version("ctranslate2")
+        if current == target:
+            return
+        try:
+            if current:
+                print(f"[SETUP] ctranslate2 {current} khong chay duoc tren may nay "
+                      f"(crash khi nap Whisper) -> ha ve {target}.")
+            pip_install_pinned(f"ctranslate2=={target}")
+            pip_install_pinned("setuptools<81")
+        except Exception as e:
+            print(f"[SETUP] Khong khoa duoc ctranslate2=={target}: {e}")
+
     # Ensure pip itself is available.
     try:
         import pip  # noqa
@@ -203,6 +259,10 @@ def ensure_packages():
                 pip_install(pip_name)
             except Exception as e:
                 print(f"[SETUP] Optional package failed: {pip_name} | {e}")
+
+    # Khoa ctranslate2 ve ban chay duoc (4.6.0). Phai chay SAU vong cai o tren vi
+    # cai "faster-whisper" bang --upgrade co the keo ctranslate2 ve ban crash.
+    ensure_ctranslate2()
 
     # Verify required imports again.
     still_missing = []
@@ -236,14 +296,39 @@ from json_repair import repair_json
 _WHISPER_LOCK = threading.RLock()
 _WHISPER_CACHE = {}  # Shared within this app process; prevents one model per video worker.
 _WHISPER_CHILD = r'''
-import json, os, sys
-os.environ.setdefault("OMP_NUM_THREADS", "2")
-os.environ.setdefault("MKL_NUM_THREADS", "2")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
+import json, os, sys, wave
+import numpy as np
+
+# Ep OFFLINE truoc khi import faster_whisper: huggingface_hub chi doc bien nay
+# LUC IMPORT, nen dat sau se vo hieu (faster-whisper se cho mang 172s moi lan nap).
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+# KHONG dat OMP/MKL/OPENBLAS_NUM_THREADS: dat bat ky gia tri nao cung lam
+# ctranslate2 cham gap 4-5 lan (do that: khong dat 28s, OPENBLAS=2 -> 106s,
+# OMP=2 -> 145s). So thread dieu khien bang cpu_threads cua WhisperModel.
 from faster_whisper import WhisperModel
+
 source, model_name, device, compute, beam, output = sys.argv[1:]
-model = WhisperModel(model_name, device=device, compute_type=compute, cpu_threads=2, num_workers=1)
-segments, info = model.transcribe(source, vad_filter=True, beam_size=int(beam),
+
+# So thread CPU: uoc luong hop ly theo so CPU cua may (mac dinh 12).
+try:
+    cpu_total = os.cpu_count() or 8
+except Exception:
+    cpu_total = 8
+threads = max(4, min(12, cpu_total // 4))
+
+# Doc WAV bang thu vien chuan (khong dung PyAV: faster-whisper 1.2.1 goi
+# av.open(metadata_errors=...) ma PyAV 19 khong nhan -> TypeError moi lan
+# transcribe duong dan). Dua MANG numpy cho transcribe() thi khong cham tới PyAV.
+with wave.open(source, "rb") as handle:
+    raw = handle.readframes(handle.getnframes())
+audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+
+model = WhisperModel(model_name, device=device, compute_type=compute,
+                     cpu_threads=threads, num_workers=1)
+# vad_filter=False: VAD nap onnxruntime, ma onnxruntime tren may nay no
+# "access violation" ngay khi import (Silero VAD) -> crash native.
+segments, info = model.transcribe(audio, vad_filter=False, beam_size=int(beam),
                                   word_timestamps=False, condition_on_previous_text=False)
 data = [{"start": float(s.start), "end": float(s.end), "text": s.text} for s in segments]
 with open(output, "w", encoding="utf-8") as handle:
@@ -279,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.20"
+APP_VERSION = "23.6.21"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -2620,10 +2705,11 @@ class StoryPipeline:
         compute_type = "int8" if whisper_device == "cpu" else "float16"
         beam_size = max(1, min(5, int(self.cfg.get("fast_whisper_beam_size", 1))))
         skip_audio_extract = bool(self.cfg.get("skip_audio_extract", True))
-        # Windows WebDAV drives can crash the native video decoder. Feed
-        # Whisper a WAV stored on the local disk instead of the Z: video.
-        if os.name == "nt" and videos and str(videos[0].drive).upper() not in ("C:", "D:"):
-            skip_audio_extract = False
+        # LUON xuat WAV 16k mono tren dia local: faster-whisper 1.2.1 goi
+        # av.open(..., metadata_errors=...) ma PyAV 19 khong nhan tham so do ->
+        # TypeError. Dua MANG numpy (doc tu WAV) cho transcribe() thi khong cham
+        # tới PyAV. WAV local cung tranh loi decoder native tren o WebDAV (Z:).
+        skip_audio_extract = False
 
         self._log(
             f"Loading faster-whisper: {whisper_name} | device={whisper_device} | "
@@ -2667,12 +2753,11 @@ class StoryPipeline:
                                 str(beam_size), str(output_file)]
                         child_env = os.environ.copy()
                         if safe_cpu:
-                            # Constrain CPU dispatch and avoid MKL's packed
-                            # GEMM path only in the isolated child process.
-                            child_env.update(CT2_FORCE_CPU_ISA="GENERIC", CT2_USE_MKL="0",
-                                             CT2_PACKED_GEMM="0", OMP_NUM_THREADS="1",
-                                             MKL_NUM_THREADS="1", CT2_VERBOSE="1")
-                            self._log("Whisper lỗi; thử lại model base với CPU GENERIC, tắt MKL.")
+                            # Du phong: thu model base nhe hon.
+                            # KHONG dat OMP/MKL_NUM_THREADS o day - dat bat ky gia tri nao
+                            # cung lam ctranslate2 cham gap 4-5 lan (do that: khong dat 28s,
+                            # OMP=2 -> 145s). Truong hop nay chi con la luoi an toan cuoi.
+                            self._log("Whisper lỗi; thử lại model base nhẹ hơn.")
                         try:
                             process = subprocess.run(args, capture_output=True, text=True,
                                                      errors="replace", timeout=1200, env=child_env)

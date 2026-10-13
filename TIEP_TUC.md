@@ -1,11 +1,61 @@
 # TIẾP TỤC — Phong_DHue
 
-**Phiên bản hiện tại: v23.6.20** (cập nhật 2026-10-12)
+**Phiên bản hiện tại: v23.6.21** (cập nhật 2026-10-13)
 
 ## Trạng thái: ĐANG CHẠY ỔN
 - File chính: `viet_drama_V23.6_dashboard_thumbnail.py` (**LF-only**, py_compile OK).
 - GitHub + ổ Z đã đồng bộ (12/12 MD5 khớp).
 - **KHÔNG được ghi đè config thật** — test GUI phải so MD5 trước/sau.
+
+## v23.6.21 — VÁ "TOOL ĐỨNG RẤT LÂU / NHƯ TREO" Ở BƯỚC TRANSCRIPTION (port từ Phong_ADung)
+
+**Triệu chứng:** log dừng ở `Transcribing 1/1: a.mp4`, đứng 2–3 phút, sau đó tiến trình
+**CHẾT** (không có traceback Python). Nhìn như treo nhưng thực ra là crash native.
+
+**Đo thật trên máy này** (Xeon E5-2673 v3, 48 logical CPU, video 30s, model small):
+
+| | Thời gian |
+|---|---|
+| Bản cũ | **145–172s rồi chết** |
+| Sau khi vá | **~20–37s** |
+
+**BỐN nguyên nhân độc lập — đã vá hết:**
+
+1. **Nạp model chờ mạng.** faster-whisper kiểm tra `huggingface.co` mỗi lần nạp model.
+   Đo: **172s khi còn chờ mạng**, chỉ **3.4s khi `HF_HUB_OFFLINE=1`**.
+   → Ép offline **ở ĐẦU file** và **trong `_WHISPER_CHILD`**. Bắt buộc phải trước khi
+   import `faster_whisper`, vì `huggingface_hub` chỉ đọc biến này **lúc import**.
+
+2. **Biến môi trường làm chậm 4–5 lần.** Bản cũ đặt `OMP/MKL/OPENBLAS_NUM_THREADS=2`
+   (cả ở đầu file lẫn trong child). Đo: **không đặt gì → 28s**; `OPENBLAS=2` → **106s**;
+   `OMP=2` → **145s**.
+   → Bỏ hẳn cả ba. Điều khiển số thread bằng `cpu_threads` của `WhisperModel`
+   (`max(4, min(12, cpu_total // 4))`).
+
+3. **PyAV không khớp.** faster-whisper 1.2.1 gọi `av.open(..., metadata_errors=...)` nhưng
+   PyAV 19 không nhận → `TypeError` mỗi lần transcribe đường dẫn.
+   → **Luôn** xuất WAV 16k mono (`skip_audio_extract = False`), đọc bằng thư viện chuẩn
+   `wave`, đưa **MẢNG numpy** cho `transcribe()` — không còn chạm tới PyAV.
+
+4. **VAD làm segfault.** `vad_filter=True` nạp `onnxruntime`, mà `onnxruntime` trên máy này
+   nổ `access violation` **ngay khi import**.
+   → Tắt VAD (`vad_filter=False`).
+
+**Thêm: khoá `ctranslate2==4.6.0` trong `ensure_packages()`.** Bản 4.6.1→4.8.2 **crash native**
+khi nạp model (chỉ 4.6.0 chạy, ổn định 8/8 lần đo). `faster-whisper` chỉ đòi
+`ctranslate2<5,>=4.0`, nên nếu nó được cài lại, pip sẽ kéo về **bản crash** → lỗi treo quay lại.
+Nay tool tự kiểm tra và hạ về đúng 4.6.0 (kèm `setuptools<81` vì ct2 4.6.0 cần `pkg_resources`).
+
+**Ghi chú kỹ thuật:** DHue dùng **tiến trình con cách ly** cho Whisper (`_WHISPER_CHILD`),
+nên crash native chỉ làm hỏng 1 video thay vì sập cả tool — cơ chế này được giữ nguyên.
+Bản vá chỉ sửa nội dung child (offline, bỏ biến thread, WAV+numpy, tắt VAD) và phần chuẩn bị
+WAV ở tiến trình cha.
+
+**Đã test:** `_WHISPER_CHILD` chạy độc lập → exit 0, 3 đoạn, không crash. Import module cha OK,
+`HF_HUB_OFFLINE=1`, `OMP=None`, `OPENBLAS=None`.
+
+**Cách kiểm tra nhanh khi nghi "treo":** mở Task Manager xem tiến trình `python` còn không.
+Nếu tiến trình **biến mất** → crash native (xem `whisper_logs\`), không phải treo.
 
 ## v23.6.20 — FIX LỖI 502 KHI ĐĂNG BÀI LÊN ADSCONEX (nguyên nhân gốc đã đo được)
 
@@ -60,6 +110,7 @@ token của `admin` cùng payload → 201. Tầng verify xử lý token của us
 ## BẢN GẦN ĐÂY
 | Bản | Nội dung |
 |---|---|
+| v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) |
 | v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
 | v23.6.16 | Port phần đăng bài Adsconex sang bản DHue (theo đúng file anh gửi, KHÔNG sửa logic riêng) |
 | v23.6.17 | **Fix TREO khi đăng bài do LỆCH ĐỒNG HỒ** (3 lớp: giờ máy, bỏ mark tương lai, chờ tối đa 25s) |
