@@ -364,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.23"
+APP_VERSION = "23.6.24"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -605,11 +605,43 @@ LANGUAGE_KEYS = [key for _label, key in LANGUAGE_OPTIONS]
 LANGUAGE_LABELS = {key: label for label, key in LANGUAGE_OPTIONS}
 LANGUAGE_LABEL_TO_KEY = {label: key for label, key in LANGUAGE_OPTIONS}
 
+# Cau ket caption (CTA). Phai dich theo ngon ngu, neu khong caption se bi tron
+# ngon ngu: than bai tieng Nhat ma cau cuoi lai tieng Anh.
+CAPTION_CTA = {
+    "English": "Read the full story — link in the comments.",
+    "Vietnamese": "Đọc trọn câu chuyện — link ở phần bình luận.",
+    "Spanish": "Lee la historia completa — enlace en los comentarios.",
+    "Portuguese": "Leia a história completa — link nos comentários.",
+    "French": "Lisez l'histoire complète — lien dans les commentaires.",
+    "German": "Lies die ganze Geschichte — Link in den Kommentaren.",
+    "Italian": "Leggi la storia completa — link nei commenti.",
+    "Indonesian": "Baca cerita lengkapnya — link ada di komentar.",
+    "Thai": "อ่านเรื่องเต็มได้ที่ลิงก์ในคอมเมนต์",
+    "Filipino": "Basahin ang buong kuwento — nasa komento ang link.",
+    "Hindi": "पूरी कहानी पढ़ें — लिंक कमेंट में है।",
+    "Arabic": "اقرأ القصة كاملة — الرابط في التعليقات.",
+    "Turkish": "Hikâyenin tamamını okuyun — bağlantı yorumlarda.",
+    "Japanese": "全文はコメント欄のリンクから。",
+    "Korean": "전체 이야기는 댓글의 링크에서 확인하세요.",
+    "Chinese": "完整故事请看评论区的链接。",
+}
+ALL_CTAS = sorted(set(CAPTION_CTA.values()), key=len, reverse=True)
+
 
 def language_label(language_key: str) -> str:
     """Nhan hien thi cua mot ngon ngu; nhan la thi tra ve nguyen van."""
     key = str(language_key or "").strip()
     return LANGUAGE_LABELS.get(key, key or "English")
+
+
+def language_prompt_name(language_key: str) -> str:
+    """Ten ngon ngu gon (bo phan trong ngoac) de dua vao prompt.
+
+    Nhan hien thi la "Japanese (日本語)" nhung trong prompt chi nen ghi
+    "Japanese" cho sach, tranh tron ky tu vao cau lenh.
+    """
+    label = language_label(language_key)
+    return label.split(" (")[0].strip() or "English"
 
 
 def effective_language(cfg) -> str:
@@ -624,6 +656,42 @@ def effective_language(cfg) -> str:
     return key if key in LANGUAGE_LABELS else "English"
 
 
+def strip_language_rules(prompt: str, language_key: str) -> str:
+    """Bo MOI cau ghim ngon ngu trong prompt goc khi nguoi dung da chon ngon ngu.
+
+    Prompt goc ghim tieng Anh o vai cho ("viet bang English", "natural American
+    English", "doc gia My/Au"...). Neu de nguyen thi model nhan 2 lenh trai nhau
+    va ket qua lai ra tieng Anh. Ham nay thay cac cau do bang ngon ngu da chon,
+    nen truyen chi theo DUNG MOT ngon ngu, mac ke video/kich ban goc la gi.
+    """
+    label = language_prompt_name(language_key)
+    if not prompt:
+        return prompt or ""
+    if label == "English":
+        return prompt  # Mac dinh: giu nguyen prompt goc, khong dung tới.
+
+    out = prompt
+    replacements = [
+        # Prompt goc (tieng Viet, viet bang \n that trong chuoi)
+        ("Full Story và Caption viết bằng **English**.",
+         f"Full Story và Caption viết bằng **{label}**."),
+        ("Ưu tiên **natural American English**.",
+         f"Ưu tiên văn phong tự nhiên của người bản xứ {label}."),
+        ("Tên tiếng Anh tự nhiên, dễ hiểu với người Mỹ, tạo tò mò nhưng không spoil kết thúc.",
+         f"Tên truyện viết bằng {label}, tự nhiên, dễ hiểu, tạo tò mò nhưng không spoil kết thúc."),
+        ("dành cho độc giả Mỹ/Âu, đặc biệt nhóm trung niên và lớn tuổi",
+         f"dành cho độc giả nói tiếng {label}, đặc biệt nhóm trung niên và lớn tuổi"),
+        # Addendum tieng Anh
+        ("Write the FULL BLOG STORY in natural American English",
+         f"Write the FULL BLOG STORY in {label}"),
+        ("Use natural American English, about 180-300 words.",
+         f"Use {label}, about 180-300 words."),
+    ]
+    for old, new in replacements:
+        out = out.replace(old, new)
+    return out
+
+
 def language_instruction(language_key: str) -> str:
     """Chi thi ngon ngu, noi vao MOI loi goi Writer.
 
@@ -631,7 +699,7 @@ def language_instruction(language_key: str) -> str:
     nen phai nhac ro va nhac lai o tung request: story architecture, tung batch
     chapter, metadata, Facebook caption va tieu de video.
     """
-    label = language_label(language_key)
+    label = language_prompt_name(language_key)
     if label == "English":
         # Mac dinh: giu nguyen hanh vi cu, khong them chi thi nao.
         return ""
@@ -647,8 +715,8 @@ def language_instruction(language_key: str) -> str:
         "do not translate them.\n"
         f"RULES ABOVE THAT MENTION ENGLISH OR AMERICAN ENGLISH ARE OVERRIDDEN: the language to "
         f"use is {label}.\n"
-        "Chapter headings still use the exact format requested by the tool "
-        f"(the word \"Chapter\" + number), but the chapter TITLE and BODY are written in {label}."
+        f"Chapter headings keep the tool's exact format (the word \"Chapter\" + number), but the "
+        f"chapter TITLE and BODY are written in {label}."
     )
 
 GUIDE_TEXT = """
@@ -3385,7 +3453,8 @@ Do not invent unsupported events. Keep chronology. Use neutral role labels if na
                                 "This automated run explicitly requests the entire story in one run; "
                                 "create the architecture first, then continue without waiting for approval. "
                                 "Return STRICT valid JSON matching the schema in the user request.\n\n"
-                                + self.cfg["story_prompt_text"]
+                                + strip_language_rules(self.cfg["story_prompt_text"],
+                                                       effective_language(self.cfg))
                                 + lang_note
                                 + (
                                     "\n\nAPPROVED VIDEO SCRIPT — LOCKED SOURCE FOR THE HOOK. "
@@ -4224,8 +4293,11 @@ Return STRICT JSON only:
             "endangered, let HER tell it as 'I', 'my son', 'my granddaughter', etc. "
             "Identify the correct narrator from THIS story; never copy names, relationships "
             "or events from any other example.\n"
-            "Use natural American English, about 180-300 words. Put EACH sentence or dialogue "
-            "line in its own paragraph with one blank line before the next. Start inside the dangerous event, with the narrator's "
+            + ("Use natural American English, about 180-300 words. Put EACH sentence or dialogue "
+               if language_prompt_name(effective_language(self.cfg)) == "English" else
+               f"Use {language_prompt_name(effective_language(self.cfg))}, about 180-300 words. "
+               "Put EACH sentence or dialogue ")
+            + "line in its own paragraph with one blank line before the next. Start inside the dangerous event, with the narrator's "
             "fear and physical experience. Then reveal the rescue, the unfair accusation and "
             "the phone/evidence only to the extent already shown in the approved video. "
             "Use brief dialogue and varied sentence lengths. Finish with an emotional open "
@@ -4237,10 +4309,12 @@ Return STRICT JSON only:
             "recording if that occurs in the story. Do not invent precise durations, secret "
             "money/house schemes, or other details unless supported by the approved script "
             "or completed Blog. No chapter titles, hashtags or post metadata. "
-            "End EXACTLY with: Read the full story — link in the comments.\n"
+            "End EXACTLY with: " + CAPTION_CTA.get(effective_language(self.cfg),
+                                                    CAPTION_CTA["English"]) + "\n"
             "Return STRICT JSON only: {\"caption\": \"first-person caption with \\n\\n between paragraphs\"}.\n\n"
             "STORY CONTEXT:\n" + json.dumps(source, ensure_ascii=False)
         )
+        cta = CAPTION_CTA.get(effective_language(self.cfg), CAPTION_CTA["English"])
         for attempt in range(2):
             caption = str(self._writer_json_call("Facebook caption", prompt, max_tokens=1400).get("caption") or "").strip()
             words = len(caption.split())
@@ -4250,10 +4324,14 @@ Return STRICT JSON only:
                     and len(pronouns) >= 4
                     and re.search(r"\b(?:I|my|me|we|our)\b", opening, flags=re.I)
                     and not re.search(r"screen went black|hard cut|the video ends|the viewer", caption, flags=re.I)):
-                cta = "Read the full story — link in the comments."
-                if not caption.endswith(cta):
-                    caption = caption.rstrip().removesuffix("Read the full story - link in the comments.").rstrip()
-                    caption += "\n\n" + cta
+                # Chuan hoa cau ket ve dung CTA cua ngon ngu da chon; bo moi CTA
+                # cu (ke ca tieng Anh) neu model lo giu lai.
+                body = caption
+                for old_cta in ALL_CTAS:
+                    if body.endswith(old_cta):
+                        body = body[:-len(old_cta)].rstrip()
+                        break
+                caption = body + "\n\n" + cta
                 return caption
             self._log(f"Caption chưa đúng giọng kể/độ dài (lần {attempt + 1}/2); viết lại.")
             prompt += ("\n\nREWRITE: First-person personal confession, 180-300 words, "

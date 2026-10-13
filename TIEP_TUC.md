@@ -1,11 +1,44 @@
 # TIẾP TỤC — Phong_DHue
 
-**Phiên bản hiện tại: v23.6.23** (cập nhật 2026-10-13)
+**Phiên bản hiện tại: v23.6.24** (cập nhật 2026-10-13)
 
 ## Trạng thái: ĐANG CHẠY ỔN
 - File chính: `viet_drama_V23.6_dashboard_thumbnail.py` (**LF-only**, py_compile OK).
 - GitHub + ổ Z đã đồng bộ (12/12 MD5 khớp).
 - **KHÔNG được ghi đè config thật** — test GUI phải so MD5 trước/sau.
+
+## v23.6.24 — NGÔN NGỮ: BỎ HẲN CÂU GHIM TIẾNG ANH TRONG PROMPT
+
+**Yêu cầu:** tích ngôn ngữ thì truyện chỉ theo **đúng một ngôn ngữ đã chọn**, mặc kệ video/kịch bản gốc là gì.
+
+**Vấn đề của v23.6.23:** mới chỉ **thêm** chỉ thị ngôn ngữ, còn prompt gốc vẫn còn **6 câu ghim tiếng Anh**:
+
+| Câu ghim cũ | Nằm ở |
+|---|---|
+| `Full Story và Caption viết bằng **English**.` | prompt chính |
+| `Ưu tiên **natural American English**.` | prompt chính |
+| `Tên tiếng Anh tự nhiên, dễ hiểu với người Mỹ...` | prompt chính |
+| `...dành cho độc giả Mỹ/Âu...` | prompt chính |
+| `Write the FULL BLOG STORY in natural American English` | addendum ngôi thứ nhất |
+| `Use natural American English, about 180-300 words.` | prompt caption |
+
+→ Model nhận **hai lệnh trái nhau** nên kết quả vẫn ra tiếng Anh.
+
+**Cách sửa:** `strip_language_rules()` thay cả 6 câu bằng ngôn ngữ đã chọn **trước khi gửi model**.
+Đã kiểm chứng: prompt gửi model **không còn câu ghim tiếng Anh nào**.
+
+**Thêm `CAPTION_CTA`:** câu kết caption được dịch theo ngôn ngữ (đủ 16 ngôn ngữ) và **tự chuẩn hóa** —
+nếu model trả về CTA tiếng Anh cũ thì tự bỏ và thay bằng CTA đúng ngôn ngữ (nếu không, caption sẽ
+trộn ngôn ngữ: thân bài tiếng Nhật mà câu cuối tiếng Anh).
+
+**KHÔNG tích = prompt y nguyên như cũ** — đã kiểm: `strip(prompt, "English")` giống hệt từng byte,
+`language_instruction("English")` trả chuỗi rỗng. Không thể làm hỏng hành vi cũ.
+
+**Đã test:**
+- Tích `Japanese` → prompt không còn `American English` / `Mỹ/Âu` / `viết bằng **English**`; chỉ còn `Japanese`.
+- Cả 16 ngôn ngữ đều có tên gọn (bỏ phần trong ngoặc) + CTA riêng.
+- CTA chuẩn hóa đúng ở cả 3 tình huống (model trả CTA tiếng Anh cũ / không có CTA / CTA đúng sẵn).
+- Config MD5 **không đổi** trước/sau test GUI.
 
 ## v23.6.23 — CHỌN NGÔN NGỮ CHO TRUYỆN (áp cho mọi câu chuyện + mọi chapter)
 
@@ -156,8 +189,8 @@ token của `admin` cùng payload → 201. Tầng verify xử lý token của us
 ## BẢN GẦN ĐÂY
 | Bản | Nội dung |
 |---|---|
-| v23.6.23 | **Chọn ngôn ngữ cho truyện** (nút tích + 16 ngôn ngữ ở tab SmartTraffic; áp cho mọi truyện + mọi chapter; không tích = tiếng Anh như cũ) |
-| v23.6.22 | **Thêm logo YouTube trên ảnh bìa website** (port nguyên từ Phong_ADung, giống hệt từng byte; mặc định TẮT) || v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) || v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
+| v23.6.24 | **Ngôn ngữ: bỏ hẳn câu ghim tiếng Anh trong prompt** (tích ngôn ngữ = truyện chỉ theo đúng 1 ngôn ngữ, mặc kệ video gốc; thêm CTA dịch theo ngôn ngữ) |
+| v23.6.23 | **Chọn ngôn ngữ cho truyện** (nút tích + 16 ngôn ngữ ở tab SmartTraffic; áp cho mọi truyện + mọi chapter; không tích = tiếng Anh như cũ) || v23.6.22 | **Thêm logo YouTube trên ảnh bìa website** (port nguyên từ Phong_ADung, giống hệt từng byte; mặc định TẮT) || v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) || v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
 | v23.6.16 | Port phần đăng bài Adsconex sang bản DHue (theo đúng file anh gửi, KHÔNG sửa logic riêng) |
 | v23.6.17 | **Fix TREO khi đăng bài do LỆCH ĐỒNG HỒ** (3 lớp: giờ máy, bỏ mark tương lai, chờ tối đa 25s) |
 | v23.6.19 | **Vá crash PATH** — `configure_ffmpeg()` chỉ thêm ffmpeg vào PATH 1 lần (trước: mỗi video thêm 1 lần → nổ `ValueError` ở ~lần 454) |
