@@ -1,11 +1,36 @@
 # TIẾP TỤC — Phong_DHue
 
-**Phiên bản hiện tại: v23.6.25** (cập nhật 2026-10-13)
+**Phiên bản hiện tại: v23.6.26** (cập nhật 2026-10-13)
 
 ## Trạng thái: ĐANG CHẠY ỔN
 - File chính: `viet_drama_V23.6_dashboard_thumbnail.py` (**LF-only**, py_compile OK).
 - GitHub + ổ Z đã đồng bộ (12/12 MD5 khớp).
 - **KHÔNG được ghi đè config thật** — test GUI phải so MD5 trước/sau.
+
+## v23.6.26 — FIX SmartTraffic HTTP 500 (lỗi TẠM THỜI, không phải lỗi nội dung)
+
+**Triệu chứng:** đăng bài báo `SmartTraffic HTTP 500: {'success': False, 'status': 500, 'message': 'Internal Server Error'}`.
+Tool gửi 2 lần (cách nhau **0,5s**) rồi dừng hẳn.
+
+**Đã đo để tìm nguyên nhân:**
+- Lấy **chính payload** trong thư mục output và gửi lại → **HTTP 201 trong 0,4 giây**.
+- Payload tiếng Việt có dấu (60.870 ký tự, 10 chương, 9 `{{nextpage}}`) đăng **bình thường** —
+  thử cả bản rút gọn và bản bỏ dấu, đều 201.
+- Trong 30 lần đăng cũ: **24 thành công / 6 lỗi 500**, và cùng một thư mục có cả 500 lẫn 201.
+
+→ **500 là lỗi tạm thời phía SmartTraffic**, KHÔNG phải do ngôn ngữ, độ dài hay ký tự có dấu.
+Bản cũ chỉ gửi 2 lần cách nhau 0,5s nên một cơn lỗi tạm thời làm hỏng cả lượt chạy.
+
+**Cách sửa:** gặp 5xx thì **gửi lại CHÍNH payload đó** (không đổi nội dung, không đổi slug) với
+giãn cách tăng dần **20s → 40s → 60s → 80s** (tổng ~3,5 phút).
+- `smarttraffic_retry_count` (mặc định `4`) và `smarttraffic_retry_delay` (mặc định `20`) nằm trong config,
+  sửa được **không cần vào code**.
+- Giữ nguyên slug nên nếu lần đầu server **đã lưu** bài rồi mới 500, lần sau sẽ là bài trùng chứ
+  **không sinh `-2`/`-3`**.
+- Hết lượt thử mà vẫn 5xx thì **dừng hẳn** — không thử "payload rút gọn" nữa, vì bản rút gọn dùng
+  **cùng slug** nên dễ sinh bài trùng. Chờ vài phút rồi dùng nút đăng lại bài lỗi.
+
+**Đã test:** giả lập server trả `500, 500, 201` → tool thử lại đúng 2 lần rồi **đăng thành công**.
 
 ## v23.6.25 — FIX LỖI "Caption chưa đạt giọng kể ngôi thứ nhất" KHI CHỌN NGÔN NGỮ KHÁC TIẾNG ANH
 
@@ -217,8 +242,8 @@ token của `admin` cùng payload → 201. Tầng verify xử lý token của us
 ## BẢN GẦN ĐÂY
 | Bản | Nội dung |
 |---|---|
-| v23.6.25 | **Fix caption khi chọn ngôn ngữ khác tiếng Anh** (bộ kiểm tra chỉ nhận đại từ tiếng Anh nên loại oan caption tiếng Việt; thêm markers + độ dài + câu nhắc viết lại cho đủ 16 ngôn ngữ) |
-| v23.6.24 | **Ngôn ngữ: bỏ hẳn câu ghim tiếng Anh trong prompt** (tích ngôn ngữ = truyện chỉ theo đúng 1 ngôn ngữ, mặc kệ video gốc; thêm CTA dịch theo ngôn ngữ) || v23.6.23 | **Chọn ngôn ngữ cho truyện** (nút tích + 16 ngôn ngữ ở tab SmartTraffic; áp cho mọi truyện + mọi chapter; không tích = tiếng Anh như cũ) || v23.6.22 | **Thêm logo YouTube trên ảnh bìa website** (port nguyên từ Phong_ADung, giống hệt từng byte; mặc định TẮT) || v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) || v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
+| v23.6.26 | **Fix SmartTraffic HTTP 500** (lỗi tạm thời phía server; thử lại chính payload đó với giãn cách 20/40/60/80s thay vì gửi 2 lần cách 0,5s) |
+| v23.6.25 | **Fix caption khi chọn ngôn ngữ khác tiếng Anh** (bộ kiểm tra chỉ nhận đại từ tiếng Anh nên loại oan caption tiếng Việt; thêm markers + độ dài + câu nhắc viết lại cho đủ 16 ngôn ngữ) || v23.6.24 | **Ngôn ngữ: bỏ hẳn câu ghim tiếng Anh trong prompt** (tích ngôn ngữ = truyện chỉ theo đúng 1 ngôn ngữ, mặc kệ video gốc; thêm CTA dịch theo ngôn ngữ) || v23.6.23 | **Chọn ngôn ngữ cho truyện** (nút tích + 16 ngôn ngữ ở tab SmartTraffic; áp cho mọi truyện + mọi chapter; không tích = tiếng Anh như cũ) || v23.6.22 | **Thêm logo YouTube trên ảnh bìa website** (port nguyên từ Phong_ADung, giống hệt từng byte; mặc định TẮT) || v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) || v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
 | v23.6.16 | Port phần đăng bài Adsconex sang bản DHue (theo đúng file anh gửi, KHÔNG sửa logic riêng) |
 | v23.6.17 | **Fix TREO khi đăng bài do LỆCH ĐỒNG HỒ** (3 lớp: giờ máy, bỏ mark tương lai, chờ tối đa 25s) |
 | v23.6.19 | **Vá crash PATH** — `configure_ffmpeg()` chỉ thêm ffmpeg vào PATH 1 lần (trước: mỗi video thêm 1 lần → nổ `ValueError` ở ~lần 454) |

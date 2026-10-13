@@ -364,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.25"
+APP_VERSION = "23.6.26"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -576,6 +576,10 @@ DEFAULT_CONFIG = {
     "keep_frames": False,
     # Nut tich "Ap ngon ngu da chon": False = mac dinh tieng Anh nhu truoc gio.
     "language_enabled": False,
+    # SmartTraffic thinh thoang tra 5xx TAM THOI -> thu lai chinh payload do.
+    # Gian cach tang dan: 20s, 40s, 60s, 80s (tong ~3,5 phut).
+    "smarttraffic_retry_count": "4",
+    "smarttraffic_retry_delay": "20",
 }
 
 # ---------------------------------------------------------------------------
@@ -5010,6 +5014,20 @@ Return STRICT JSON only:
             # created -2/-3 duplicate slugs on SmartTraffic.
         ]
 
+        # SmartTraffic thinh thoang tra 5xx TAM THOI (da do: CUNG payload do,
+        # lan dau 500 ca 2 luot, thu lai sau do vai phut -> 201 trong 0,4s).
+        # Vi vay gap 5xx thi thu lai CHINH payload do (khong doi noi dung, khong
+        # doi slug) voi gian cach tang dan. So lan thu lai va gian cach lay tu
+        # config de sau nay chinh duoc ma khong phai sua code.
+        try:
+            retry_count = max(0, min(int(str(self.cfg.get("smarttraffic_retry_count", "4")).strip() or "4"), 10))
+        except Exception:
+            retry_count = 4
+        try:
+            retry_delay = max(1, min(int(str(self.cfg.get("smarttraffic_retry_delay", "20")).strip() or "20"), 300))
+        except Exception:
+            retry_delay = 20
+
         last_error = None
         for attempt_no, (marker, include_seo, label) in enumerate(attempts, 1):
             payload = make_payload(marker, include_seo)
@@ -5038,6 +5056,28 @@ Return STRICT JSON only:
                 r = requests.post(endpoint, headers=headers, json=payload, timeout=120)
             except Exception as e:
                 last_error = f"Network/request error: {e}"
+                break
+
+            # 5xx = loi TAM THOI phia SmartTraffic -> gui lai CHINH payload nay.
+            # Giu nguyen slug nen neu lan dau thuc ra da tao bai (server 500 sau
+            # khi luu) thi lan sau se la bai trung, khong sinh -2/-3.
+            retry_round = 0
+            net_error = False
+            while r.status_code >= 500 and retry_round < retry_count:
+                retry_round += 1
+                wait = retry_delay * retry_round
+                self._log(
+                    f"SmartTraffic HTTP {r.status_code} (lỗi tạm thời phía server) | "
+                    f"gửi lại lần {retry_round}/{retry_count} sau {wait}s (giữ nguyên nội dung + slug)"
+                )
+                time.sleep(wait)
+                try:
+                    r = requests.post(endpoint, headers=headers, json=payload, timeout=120)
+                except Exception as e:
+                    last_error = f"Network/request error: {e}"
+                    net_error = True
+                    break
+            if net_error:
                 break
 
             try:
@@ -5099,8 +5139,12 @@ Return STRICT JSON only:
                 break
             if r.status_code < 500:
                 break
-            if attempt_no < len(attempts):
-                time.sleep(0.5)
+            # Da thu lai het luot ma van 5xx: DUNG lai, KHONG thu payload rut gon
+            # nua. Payload rut gon dung CUNG slug nen de sinh bai trung/-2 tren
+            # website. Nguoi dung bam "Dang lai bai loi" khi server da hoi.
+            self._log("Đã thử lại đủ số lần mà server vẫn lỗi 5xx; dừng để tránh tạo bài trùng. "
+                      "Chờ vài phút rồi dùng nút đăng lại bài lỗi.")
+            break
 
         raise RuntimeError(f"{last_error}\n\nRequest/response debug đã được lưu trong output folder.")
 
