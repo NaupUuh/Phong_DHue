@@ -1,11 +1,29 @@
 # TIẾP TỤC — Phong_DHue
 
-**Phiên bản hiện tại: v23.6.21** (cập nhật 2026-10-13)
+**Phiên bản hiện tại: v23.6.22** (cập nhật 2026-10-13)
 
 ## Trạng thái: ĐANG CHẠY ỔN
 - File chính: `viet_drama_V23.6_dashboard_thumbnail.py` (**LF-only**, py_compile OK).
 - GitHub + ổ Z đã đồng bộ (12/12 MD5 khớp).
 - **KHÔNG được ghi đè config thật** — test GUI phải so MD5 trước/sau.
+
+## v23.6.22 — THÊM LOGO YOUTUBE TRÊN ẢNH BÌA WEBSITE (port từ Phong_ADung)
+
+Port **nguyên** từ Phong_ADung, đã đối chiếu **giống hệt từng byte** (6/6 khối: `_youtube_badge_font`,
+`draw_youtube_badge`, `_youtube_badge_settings`, đoạn GUI `badge_box`, `preview_youtube_badge`,
+và chỗ gọi trong `attach_local_images`).
+
+**Tab Ảnh → khung "Logo YouTube trên ảnh bìa website":**
+- Bật/tắt vẽ logo vào **CHÍNH GIỮA** ảnh bìa website 290×290.
+- **Kiểu logo**: `play` = nút play đỏ (khuyến dùng, giống video chưa mở) / `logo` = thêm chữ "YouTube".
+- **Kích thước**: % chiều rộng ảnh (kẹp 10–60%).
+- Nút **"Xem trước logo"**: vẽ thử lên ảnh bìa của lần chạy gần nhất rồi mở file.
+
+**Mặc định TẮT** — ảnh bìa giữ nguyên như trước, không ảnh hưởng luồng đăng bài.
+**Ảnh bìa Facebook KHÔNG bị ảnh hưởng.**
+
+**Đã test:** vẽ được cả 2 kiểu trên ảnh 290×290 (kiểm pixel: nút đỏ + tam giác trắng), có/không logo
+khác nhau, GUI build OK (5 widget logo hiện đúng), config MD5 **không đổi** trước/sau test.
 
 ## v23.6.21 — VÁ "TOOL ĐỨNG RẤT LÂU / NHƯ TREO" Ở BƯỚC TRANSCRIPTION (port từ Phong_ADung)
 
@@ -110,8 +128,8 @@ token của `admin` cùng payload → 201. Tầng verify xử lý token của us
 ## BẢN GẦN ĐÂY
 | Bản | Nội dung |
 |---|---|
-| v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) |
-| v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
+| v23.6.22 | **Thêm logo YouTube trên ảnh bìa website** (port nguyên từ Phong_ADung, giống hệt từng byte; mặc định TẮT) |
+| v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) || v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
 | v23.6.16 | Port phần đăng bài Adsconex sang bản DHue (theo đúng file anh gửi, KHÔNG sửa logic riêng) |
 | v23.6.17 | **Fix TREO khi đăng bài do LỆCH ĐỒNG HỒ** (3 lớp: giờ máy, bỏ mark tương lai, chờ tối đa 25s) |
 | v23.6.19 | **Vá crash PATH** — `configure_ffmpeg()` chỉ thêm ffmpeg vào PATH 1 lần (trước: mỗi video thêm 1 lần → nổ `ValueError` ở ~lần 454) |

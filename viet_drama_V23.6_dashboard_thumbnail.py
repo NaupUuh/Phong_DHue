@@ -364,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.21"
+APP_VERSION = "23.6.22"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -444,6 +444,10 @@ FIXED_PRODUCTION_SETTINGS = {
     "facebook_thumbnail_mode": True,
     "thumbnail_width": "290",
     "thumbnail_height": "290",
+    # Logo YouTube ve them o giua anh bia website (mac dinh TAT).
+    "youtube_badge_on_cover": False,
+    "youtube_badge_style": "play",
+    "youtube_badge_scale": "30",
     "cloudinary_workers": "4",
     "require_thumbnail_before_publish": True,
 }
@@ -556,6 +560,10 @@ DEFAULT_CONFIG = {
     "facebook_thumbnail_mode": True,
     "thumbnail_width": "290",
     "thumbnail_height": "290",
+    # Logo YouTube ve them o giua anh bia website (mac dinh TAT).
+    "youtube_badge_on_cover": False,
+    "youtube_badge_style": "play",
+    "youtube_badge_scale": "30",
     "require_thumbnail_before_publish": True,
     "fast_whisper_beam_size": "1",
     "skip_audio_extract": True,
@@ -2430,8 +2438,89 @@ def choose_best_frame(
     )
 
 
-def make_social_thumbnail(src_path: Path, out_path: Path, width: int = 290, height: int = 290) -> Path:
-    """Resize then crop a square below 300px, centered on the detected face."""
+def _youtube_badge_font(size: int):
+    """Chon font dam de ve chu YouTube; may nao thieu font thi dung mac dinh."""
+    from PIL import ImageFont
+    size = max(8, int(size))
+    fonts_dir = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+    for name in ("arialbd.ttf", "ariblk.ttf", "segoeuib.ttf", "arial.ttf", "segoeui.ttf"):
+        for cand in (os.path.join(fonts_dir, name), name):
+            try:
+                return ImageFont.truetype(cand, size)
+            except Exception:
+                continue
+    try:
+        return ImageFont.load_default(size=size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def draw_youtube_badge(img, style: str = "play", scale: float = 0.30, shadow: bool = True):
+    """Ve huy hieu YouTube vao CHINH GIUA anh.
+
+    style="play" -> o do bo goc + tam giac trang (giong 1 video chua mo)
+    style="logo" -> o do bo goc + tam giac + chu "YouTube" mau trang
+    scale        -> chieu rong huy hieu / chieu rong anh (0.30 = 30%)
+    """
+    from PIL import ImageDraw
+    base = img.convert("RGBA")
+    w, h = base.size
+    is_logo = str(style or "").strip().lower().startswith("logo")
+    try:
+        scale = float(scale)
+    except Exception:
+        scale = 0.30
+    scale = max(0.05, min(scale, 0.95))
+    bw = int(round(w * scale))
+    bh = int(round(bw / (2.05 if is_logo else 1.417)))
+    bw = max(16, min(bw, max(16, w - 2)))
+    bh = max(12, min(bh, max(12, h - 2)))
+    x0 = (w - bw) // 2
+    y0 = (h - bh) // 2
+    radius = max(2, int(round(bh * 0.24)))
+
+    if shadow:
+        overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+        od = ImageDraw.Draw(overlay)
+        off = max(2, int(round(bh * 0.10)))
+        od.rounded_rectangle(
+            [x0 + off, y0 + off, x0 + bw + off, y0 + bh + off],
+            radius=radius, fill=(0, 0, 0, 120))
+        base = Image.alpha_composite(base, overlay)
+
+    d = ImageDraw.Draw(base)
+    d.rounded_rectangle([x0, y0, x0 + bw, y0 + bh], radius=radius, fill=(255, 0, 0, 255))
+
+    th = bh * 0.46
+    tw = th * 0.82
+    tx = x0 + bw * 0.085 if is_logo else x0 + (bw - tw) / 2.0 + bw * 0.045
+    ty = y0 + (bh - th) / 2.0
+    d.polygon([(tx, ty), (tx, ty + th), (tx + tw, ty + th / 2.0)], fill=(255, 255, 255, 255))
+
+    if is_logo:
+        text = "YouTube"
+        avail = bw * 0.78
+        size = max(8, int(bh * 0.62))
+        font = _youtube_badge_font(size)
+        for _ in range(40):
+            box = d.textbbox((0, 0), text, font=font)
+            if (box[2] - box[0]) <= avail or size <= 8:
+                break
+            size -= 1
+            font = _youtube_badge_font(size)
+        box = d.textbbox((0, 0), text, font=font)
+        d.text((x0 + bw * 0.255 + (avail - (box[2] - box[0])) / 2.0 - box[0],
+                y0 + (bh - (box[3] - box[1])) / 2.0 - box[1]),
+               text, font=font, fill=(255, 255, 255, 255))
+    return base.convert("RGB")
+
+
+def make_social_thumbnail(src_path: Path, out_path: Path, width: int = 290, height: int = 290,
+                          badge_style: str = "", badge_scale: float = 0.30) -> Path:
+    """Resize then crop a square below 300px, centered on the detected face.
+
+    badge_style="play"/"logo" -> ve them huy hieu YouTube o chinh giua anh bia.
+    """
     size = max(64, min(int(width), 299))
     with Image.open(src_path) as source:
         img = source.convert("RGB")
@@ -2455,6 +2544,11 @@ def make_social_thumbnail(src_path: Path, out_path: Path, width: int = 290, heig
     left = max(0, min(resized.width - size, round(cx * ratio - size / 2)))
     top = max(0, min(resized.height - size, round(cy * ratio - size * head_ratio)))
     result = resized.crop((left, top, left + size, top + size))
+    if badge_style:
+        try:
+            result = draw_youtube_badge(result, style=badge_style, scale=badge_scale)
+        except Exception:
+            pass  # Loi ve logo khong duoc lam hong anh bia.
     out_path.parent.mkdir(parents=True, exist_ok=True)
     result.save(out_path, "JPEG", quality=92, optimize=True)
     return out_path
@@ -3875,6 +3969,20 @@ Return STRICT JSON only:
             "quality": float(best_metrics.get("final_score", 0) or 0),
         }
 
+    def _youtube_badge_settings(self):
+        """Doc tuy chon logo YouTube tu config. Tra ve (style, scale)."""
+        if not bool(self.cfg.get("youtube_badge_on_cover", False)):
+            return "", 0.0
+        style = str(self.cfg.get("youtube_badge_style", "play") or "play").strip().lower()
+        if style not in ("play", "logo"):
+            style = "play"
+        try:
+            pct = float(str(self.cfg.get("youtube_badge_scale", "30")).strip() or "30")
+        except Exception:
+            pct = 30.0
+        pct = max(10.0, min(pct, 60.0))
+        return style, pct / 100.0
+
     def attach_local_images(self, story: dict):
         # Image data from the writer is never used in a chapter, including in
         # video-only runs where frame extraction returned no usable frames.
@@ -3910,14 +4018,18 @@ Return STRICT JSON only:
         thumb = max(pool, key=thumb_score)
         original_thumb = Path(thumb["path"])
         story["thumbnail_original_local"] = str(original_thumb)
-        cover_path = make_social_thumbnail(original_thumb, self.work_dir / "thumbnail_website_290x290.jpg")
+        badge_style, badge_scale = self._youtube_badge_settings()
+        cover_path = make_social_thumbnail(original_thumb, self.work_dir / "thumbnail_website_290x290.jpg",
+                                           badge_style=badge_style, badge_scale=badge_scale)
         story["thumbnail_local"] = str(cover_path)
         story["thumbnail_size"] = "290x290"
+        story["youtube_badge"] = bool(badge_style)
         emotion = (thumb.get("emotion") or "").strip()
         sharp = float(thumb.get("sharpness", 0) or 0)
         self._log("Ảnh bìa website: 290x290px | ưu tiên CÓ NGƯỜI + nét + cảm xúc"
                   + (f" | cảm xúc: {emotion}" if emotion else "")
-                  + f" | nét: {sharp:.0f}")
+                  + f" | nét: {sharp:.0f}"
+                  + (f" | logo YouTube: {badge_style} {badge_scale*100:.0f}%" if badge_style else ""))
         if people and sharp and sharp < 25:
             self._log("LƯU Ý: khung có người nét thấp (video rung/mờ); nên kiểm tra lại ảnh bìa.")
 
@@ -6179,8 +6291,53 @@ class App(tk.Tk):
             variable=self.vars["keep_frames"],
         ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 2))
 
+        # ------------------------------------------------------------
+        # LOGO YOUTUBE tren anh bia website (mac dinh TAT)
+        # ------------------------------------------------------------
+        badge_box = ttk.LabelFrame(img, text="Logo YouTube trên ảnh bìa website")
+        badge_box.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(10, 2))
+        badge_box.columnconfigure(1, weight=1)
+
+        ttk.Checkbutton(
+            badge_box,
+            text=("Vẽ logo YouTube vào CHÍNH GIỮA ảnh bìa website 290×290 "
+                  "(giống 1 video chưa mở)"),
+            variable=self.vars["youtube_badge_on_cover"],
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(2, 4))
+
+        ttk.Label(badge_box, text="Kiểu logo", width=22).grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Combobox(
+            badge_box, textvariable=self.vars["youtube_badge_style"],
+            values=("play", "logo"), state="readonly", width=12
+        ).grid(row=1, column=1, sticky="w", pady=3)
+
+        ttk.Label(badge_box, text="Kích thước (% chiều rộng ảnh)", width=28).grid(
+            row=2, column=0, sticky="w", pady=3)
+        ttk.Entry(badge_box, textvariable=self.vars["youtube_badge_scale"], width=8).grid(
+            row=2, column=1, sticky="w", pady=3)
+
+        badge_btns = ttk.Frame(badge_box)
+        badge_btns.grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 2))
+        ttk.Button(
+            badge_btns, text="Xem trước logo", command=self.preview_youtube_badge
+        ).pack(side="left")
+        ttk.Label(
+            badge_btns,
+            text="  (dùng ảnh bìa của lần chạy gần nhất)",
+            foreground="#555"
+        ).pack(side="left")
+
+        ttk.Label(
+            badge_box,
+            text=("Kiểu 'play' = nút play đỏ (khuyên dùng, giống video chưa mở). "
+                  "Kiểu 'logo' = thêm chữ YouTube.\n"
+                  "Mặc định TẮT: ảnh bìa giữ nguyên như trước. Ảnh bìa Facebook "
+                  "KHÔNG bị ảnh hưởng."),
+            foreground="#555", justify="left", wraplength=950
+        ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(4, 2))
+
         img_buttons = ttk.Frame(img)
-        img_buttons.grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        img_buttons.grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
         ttk.Button(
             img_buttons,
             text="Mở Cloudinary Console",
@@ -6330,6 +6487,50 @@ class App(tk.Tk):
             "4) Copy 3 giá trị vào tab Image hosting.\\n\\n"
             "API Secret là thông tin bí mật, không chia sẻ cho người khác."
         )
+
+    def preview_youtube_badge(self):
+        """Ve thu logo YouTube len anh bia that va mo file cho nguoi dung xem."""
+        import tempfile
+        cfg = self.current_cfg()
+        style = str(cfg.get("youtube_badge_style", "play") or "play").strip().lower()
+        if style not in ("play", "logo"):
+            style = "play"
+        try:
+            pct = float(str(cfg.get("youtube_badge_scale", "30")).strip() or "30")
+        except Exception:
+            pct = 30.0
+        pct = max(10.0, min(pct, 60.0))
+
+        source = None
+        try:
+            if self.last_result and self.last_result.get("story"):
+                st = self.last_result["story"]
+                for key in ("thumbnail_original_local", "thumbnail_local"):
+                    p = str(st.get(key) or "").strip()
+                    if p and Path(p).exists():
+                        source = Path(p)
+                        break
+        except Exception:
+            source = None
+        if source is None:
+            messagebox.showinfo(
+                APP_NAME,
+                "Chưa có ảnh bìa để xem trước.\n\nHãy chạy 1 video trước, "
+                "rồi bấm lại nút này.")
+            return
+        try:
+            out_dir = Path(tempfile.gettempdir()) / "youtube_badge_preview"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%H%M%S")
+            out = out_dir / f"xem_truoc_{style}_{int(pct)}_{stamp}.jpg"
+            make_social_thumbnail(source, out, badge_style=style, badge_scale=pct / 100.0)
+            self.log(f"Ảnh xem trước logo YouTube: {out}")
+            try:
+                os.startfile(str(out))
+            except Exception:
+                webbrowser.open(out.as_uri())
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, f"Không tạo được ảnh xem trước: {exc}")
 
     def test_cloudinary(self):
         cfg = self.current_cfg()
