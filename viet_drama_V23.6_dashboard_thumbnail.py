@@ -364,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.24"
+APP_VERSION = "23.6.25"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -626,6 +626,51 @@ CAPTION_CTA = {
     "Chinese": "完整故事请看评论区的链接。",
 }
 ALL_CTAS = sorted(set(CAPTION_CTA.values()), key=len, reverse=True)
+
+# Dau hieu ngoi thu nhat theo tung ngon ngu. Bo kiem tra caption truoc day CHI
+# nhan dai tu tieng Anh (I/my/me/we/our) nen caption tieng Viet/Nhat/... luon bi
+# loai oan roi bao loi "Caption chua dat giong ke ngoi thu nhat".
+FIRST_PERSON_MARKERS = {
+    "English": ["I", "my", "me", "we", "our"],
+    "Vietnamese": ["tôi", "mình", "tớ", "chúng tôi", "của tôi", "em", "con"],
+    "Spanish": ["yo", "mi", "mis", "me", "nosotros"],
+    "Portuguese": ["eu", "meu", "minha", "meus", "minhas", "nós"],
+    "French": ["je", "moi", "mon", "ma", "mes", "nous"],
+    "German": ["ich", "mein", "meine", "meiner", "mir", "wir", "uns"],
+    "Italian": ["io", "mio", "mia", "miei", "noi", "mi"],
+    "Indonesian": ["saya", "aku", "kami", "kita"],
+    "Thai": ["ฉัน", "ผม", "เรา", "หนู", "ดิฉัน"],
+    "Filipino": ["ako", "ko", "akin", "kami", "namin"],
+    "Hindi": ["मैं", "मेरा", "मेरी", "मुझे", "हम"],
+    "Arabic": ["أنا", "لي", "نحن", "أنني"],
+    "Turkish": ["ben", "benim", "bana", "biz", "bizi"],
+    "Japanese": ["私", "僕", "俺", "わたし", "ぼく", "私たち"],
+    "Korean": ["나", "저", "내", "제", "우리"],
+    "Chinese": ["我", "我们", "我的", "咱們"],
+}
+
+# Ngon ngu khong dan cach bang dau cach -> do do dai bang KY TU, khong phai "tu".
+NO_SPACE_LANGUAGES = {"Japanese", "Korean", "Chinese", "Thai"}
+
+# Cau nhac viet lai caption, dich theo ngon ngu.
+CAPTION_REWRITE_NOTE = {
+    "English": "REWRITE: First-person personal confession, 180-300 words, one sentence or dialogue line per paragraph, each separated by a blank line; no scene or camera descriptions. Keep the same established facts and open loop.",
+    "Vietnamese": "VIẾT LẠI: Lời tự thuật ngôi thứ nhất, 180-300 từ, mỗi câu hoặc lời thoại một đoạn, cách nhau bằng dòng trống; không mô tả cảnh quay hay máy quay. Giữ nguyên các tình tiết đã có và giữ nguyên open loop.",
+    "Spanish": "REESCRIBE: Confesión personal en primera persona, 180-300 palabras, una frase o línea de diálogo por párrafo, separadas por una línea en blanco; sin descripciones de escena ni de cámara. Mantén los mismos hechos y el mismo open loop.",
+    "Portuguese": "REESCREVA: Confissão pessoal em primeira pessoa, 180-300 palavras, uma frase ou fala por parágrafo, separadas por uma linha em branco; sem descrições de cena ou câmera. Mantenha os mesmos fatos e o mesmo open loop.",
+    "French": "RÉÉCRIVEZ : Confession personnelle à la première personne, 180-300 mots, une phrase ou une réplique par paragraphe, séparées par une ligne vide ; aucune description de scène ni de caméra. Gardez les mêmes faits et le même open loop.",
+    "German": "NEU SCHREIBEN: Persönliches Geständnis in der Ich-Form, 180-300 Wörter, ein Satz oder eine Dialogzeile pro Absatz, durch eine Leerzeile getrennt; keine Szenen- oder Kamerabeschreibungen. Behalte dieselben Fakten und denselben Open Loop.",
+    "Italian": "RISCRIVI: Confessione personale in prima persona, 180-300 parole, una frase o battuta per paragrafo, separate da una riga vuota; nessuna descrizione di scena o di camera. Mantieni gli stessi fatti e lo stesso open loop.",
+    "Indonesian": "TULIS ULANG: Pengakuan pribadi orang pertama, 180-300 kata, satu kalimat atau dialog per paragraf, dipisah baris kosong; tanpa deskripsi adegan atau kamera. Pertahankan fakta dan open loop yang sama.",
+    "Thai": "เขียนใหม่: คำสารภาพส่วนตัวในมุมมองบุคคลที่หนึ่ง 180-300 คำ ประโยคหรือบทสนทนาละหนึ่งย่อหน้า คั่นด้วยบรรทัดว่าง ไม่บรรยายฉากหรือกล้อง รักษาข้อเท็จจริงและ open loop เดิมไว้",
+    "Filipino": "ISULAT MULI: Personal na pagtatapat sa unang panauhan, 180-300 salita, isang pangungusap o dayalogo bawat talata, pinaghihiwalay ng blangkong linya; walang paglalarawan ng eksena o kamera. Panatilihin ang parehong mga detalye at open loop.",
+    "Hindi": "फिर से लिखें: प्रथम पुरुष में व्यक्तिगत स्वीकारोक्ति, 180-300 शब्द, प्रत्येक पैराग्राफ में एक वाक्य या संवाद, बीच में खाली पंक्ति; दृश्य या कैमरा विवरण नहीं। वही तथ्य और open loop बनाए रखें।",
+    "Arabic": "أعد الكتابة: اعتراف شخصي بصيغة المتكلم، 180-300 كلمة، جملة أو سطر حوار لكل فقرة، تفصل بينها سطر فارغ؛ دون وصف للمشهد أو الكاميرا. حافظ على الوقائع نفسها وopen loop نفسه.",
+    "Turkish": "YENİDEN YAZ: Birinci tekil şahıstan kişisel itiraf, 180-300 kelime, her paragrafta bir cümle veya diyalog satırı, aralarında boş satır; sahne veya kamera betimlemesi yok. Aynı olayları ve aynı open loop'u koru.",
+    "Japanese": "書き直し: 一人称の個人的な告白、180〜300語、1文またはセリフごとに1段落とし、段落の間は空行で区切る。場面やカメラの描写は入れない。同じ事実と open loop を維持すること。",
+    "Korean": "다시 쓰기: 1인칭 개인적 고백, 180-300단어, 문장 또는 대사 하나당 한 문단, 문단 사이는 빈 줄로 구분; 장면이나 카메라 묘사 금지. 동일한 사실과 open loop를 유지할 것.",
+    "Chinese": "重写：第一人称的个人自白，180-300 字，每段一句或一句对白，段间空一行；不要场景或镜头描写。保持相同的事实和 open loop。",
+}
 
 
 def language_label(language_key: str) -> str:
@@ -4317,13 +4362,26 @@ Return STRICT JSON only:
         cta = CAPTION_CTA.get(effective_language(self.cfg), CAPTION_CTA["English"])
         for attempt in range(2):
             caption = str(self._writer_json_call("Facebook caption", prompt, max_tokens=1400).get("caption") or "").strip()
-            words = len(caption.split())
-            pronouns = re.findall(r"\b(?:I|my|me|we|our)\b", caption, flags=re.I)
+            lang_key = effective_language(self.cfg)
+            markers = FIRST_PERSON_MARKERS.get(lang_key, FIRST_PERSON_MARKERS["English"])
+            marker_re = re.compile("|".join(re.escape(m) for m in markers), flags=re.I)
             opening = caption.split("\n\n", 1)[0]
-            if (caption and 150 <= words <= 330 and caption.count("\n\n") >= 4
-                    and len(pronouns) >= 4
-                    and re.search(r"\b(?:I|my|me|we|our)\b", opening, flags=re.I)
-                    and not re.search(r"screen went black|hard cut|the video ends|the viewer", caption, flags=re.I)):
+            hits = marker_re.findall(caption)
+            # Tieng Nhat/Han/Thai khong dan cach bang dau cach -> dem ky tu thay vi "tu".
+            if lang_key in NO_SPACE_LANGUAGES:
+                length_ok = 200 <= len(caption) <= 4000
+            else:
+                length_ok = 150 <= len(caption.split()) <= 330
+            # Cac cau cam la tieng Anh -> chi kiem khi ngon ngu la tieng Anh.
+            if lang_key == "English":
+                no_camera = not re.search(
+                    r"screen went black|hard cut|the video ends|the viewer", caption, flags=re.I)
+            else:
+                no_camera = True
+            if (caption and length_ok and caption.count("\n\n") >= 4
+                    and len(hits) >= 4
+                    and marker_re.search(opening)
+                    and no_camera):
                 # Chuan hoa cau ket ve dung CTA cua ngon ngu da chon; bo moi CTA
                 # cu (ke ca tieng Anh) neu model lo giu lai.
                 body = caption
@@ -4334,9 +4392,7 @@ Return STRICT JSON only:
                 caption = body + "\n\n" + cta
                 return caption
             self._log(f"Caption chưa đúng giọng kể/độ dài (lần {attempt + 1}/2); viết lại.")
-            prompt += ("\n\nREWRITE: First-person personal confession, 180-300 words, "
-                       "one sentence or dialogue line per paragraph, each separated by a blank line; no scene or camera descriptions. "
-                       "Keep the same established facts and open loop.")
+            prompt += "\n\n" + CAPTION_REWRITE_NOTE.get(lang_key, CAPTION_REWRITE_NOTE["English"])
         raise RuntimeError("Caption chưa đạt giọng kể ngôi thứ nhất; Blog.txt đã được lưu trong thư mục kết quả.")
 
     def build_html(self, story: dict, pagebreak_marker: Optional[str] = None) -> str:

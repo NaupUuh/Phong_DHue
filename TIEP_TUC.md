@@ -1,11 +1,39 @@
 # TIẾP TỤC — Phong_DHue
 
-**Phiên bản hiện tại: v23.6.24** (cập nhật 2026-10-13)
+**Phiên bản hiện tại: v23.6.25** (cập nhật 2026-10-13)
 
 ## Trạng thái: ĐANG CHẠY ỔN
 - File chính: `viet_drama_V23.6_dashboard_thumbnail.py` (**LF-only**, py_compile OK).
 - GitHub + ổ Z đã đồng bộ (12/12 MD5 khớp).
 - **KHÔNG được ghi đè config thật** — test GUI phải so MD5 trước/sau.
+
+## v23.6.25 — FIX LỖI "Caption chưa đạt giọng kể ngôi thứ nhất" KHI CHỌN NGÔN NGỮ KHÁC TIẾNG ANH
+
+**Triệu chứng:** chọn ngôn ngữ `Vietnamese`, truyện viết xong 8/8 chapter (6.873 từ) nhưng caption
+bị viết lại 2 lần rồi tool **dừng hẳn**:
+`RuntimeError: Caption chưa đạt giọng kể ngôi thứ nhất; Blog.txt đã được lưu trong thư mục kết quả.`
+
+**Nguyên nhân:** bộ kiểm tra caption **chỉ nhận đại từ tiếng Anh** — regex `\b(?:I|my|me|we|our)\b`
+và đếm độ dài theo kiểu tiếng Anh. Caption tiếng Việt không có `I/my/me` → **luôn bị loại oan**,
+dù caption viết đúng ngôi thứ nhất. Lỗi này có từ trước, chỉ lộ ra khi chọn ngôn ngữ khác.
+
+**Cách sửa:**
+- `FIRST_PERSON_MARKERS` — đại từ ngôi thứ nhất cho **đủ 16 ngôn ngữ**
+  (`tôi/mình/em/con...`, `watashi/boku/ore...`, `je/moi/mon...`, `ich/mein...`, `yo/mi...` …).
+- `NO_SPACE_LANGUAGES` — Nhật/Hàn/Trung/Thái **không dán cách bằng dấu cách**, nên đo độ dài bằng
+  **ký tự** (200–4000) thay vì đếm "từ" (nếu không, caption tiếng Nhật 300 từ chỉ ~600 ký tự vẫn
+  bị coi là quá ngắn).
+- Câu cấm tiếng Anh (`screen went black`, `hard cut`...) **chỉ kiểm khi ngôn ngữ là tiếng Anh**.
+- `CAPTION_REWRITE_NOTE` — câu nhắc viết lại cũng **dịch theo ngôn ngữ** (trước đây luôn nhắc
+  bằng tiếng Anh, càng đẩy model về tiếng Anh).
+
+**Prompt giữ nguyên nội dung, chỉ dịch vài câu nói về ngôn ngữ:** đo độ tương đồng **99,9%**;
+16460 → 16474 ký tự (**chỉ +14**); 14 dòng thay đổi và **tất cả** đều là dòng nói về ngôn ngữ.
+
+**Đã test:**
+- Caption tiếng Việt **qua được** kiểm tra (11 đại từ ngôi thứ nhất, 9 đoạn) — trước đây bị loại.
+- Caption tiếng Anh vẫn chạy y như cũ (17 đại từ).
+- 16/16 ngôn ngữ có đủ markers + rewrite note + CTA.
 
 ## v23.6.24 — NGÔN NGỮ: BỎ HẲN CÂU GHIM TIẾNG ANH TRONG PROMPT
 
@@ -189,8 +217,8 @@ token của `admin` cùng payload → 201. Tầng verify xử lý token của us
 ## BẢN GẦN ĐÂY
 | Bản | Nội dung |
 |---|---|
-| v23.6.24 | **Ngôn ngữ: bỏ hẳn câu ghim tiếng Anh trong prompt** (tích ngôn ngữ = truyện chỉ theo đúng 1 ngôn ngữ, mặc kệ video gốc; thêm CTA dịch theo ngôn ngữ) |
-| v23.6.23 | **Chọn ngôn ngữ cho truyện** (nút tích + 16 ngôn ngữ ở tab SmartTraffic; áp cho mọi truyện + mọi chapter; không tích = tiếng Anh như cũ) || v23.6.22 | **Thêm logo YouTube trên ảnh bìa website** (port nguyên từ Phong_ADung, giống hệt từng byte; mặc định TẮT) || v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) || v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
+| v23.6.25 | **Fix caption khi chọn ngôn ngữ khác tiếng Anh** (bộ kiểm tra chỉ nhận đại từ tiếng Anh nên loại oan caption tiếng Việt; thêm markers + độ dài + câu nhắc viết lại cho đủ 16 ngôn ngữ) |
+| v23.6.24 | **Ngôn ngữ: bỏ hẳn câu ghim tiếng Anh trong prompt** (tích ngôn ngữ = truyện chỉ theo đúng 1 ngôn ngữ, mặc kệ video gốc; thêm CTA dịch theo ngôn ngữ) || v23.6.23 | **Chọn ngôn ngữ cho truyện** (nút tích + 16 ngôn ngữ ở tab SmartTraffic; áp cho mọi truyện + mọi chapter; không tích = tiếng Anh như cũ) || v23.6.22 | **Thêm logo YouTube trên ảnh bìa website** (port nguyên từ Phong_ADung, giống hệt từng byte; mặc định TẮT) || v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) || v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
 | v23.6.16 | Port phần đăng bài Adsconex sang bản DHue (theo đúng file anh gửi, KHÔNG sửa logic riêng) |
 | v23.6.17 | **Fix TREO khi đăng bài do LỆCH ĐỒNG HỒ** (3 lớp: giờ máy, bỏ mark tương lai, chờ tối đa 25s) |
 | v23.6.19 | **Vá crash PATH** — `configure_ffmpeg()` chỉ thêm ffmpeg vào PATH 1 lần (trước: mỗi video thêm 1 lần → nổ `ValueError` ở ~lần 454) |
