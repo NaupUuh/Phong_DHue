@@ -1,11 +1,39 @@
 # TIẾP TỤC — Phong_DHue
 
-**Phiên bản hiện tại: v23.6.22** (cập nhật 2026-10-13)
+**Phiên bản hiện tại: v23.6.23** (cập nhật 2026-10-13)
 
 ## Trạng thái: ĐANG CHẠY ỔN
 - File chính: `viet_drama_V23.6_dashboard_thumbnail.py` (**LF-only**, py_compile OK).
 - GitHub + ổ Z đã đồng bộ (12/12 MD5 khớp).
 - **KHÔNG được ghi đè config thật** — test GUI phải so MD5 trước/sau.
+
+## v23.6.23 — CHỌN NGÔN NGỮ CHO TRUYỆN (áp cho mọi câu chuyện + mọi chapter)
+
+**Tab SmartTraffic → nút tích "Áp ngôn ngữ đã chọn cho mọi truyện" + ô chọn ngôn ngữ.**
+
+16 ngôn ngữ: English, Vietnamese, Spanish, Portuguese, French, German, Italian, Indonesian,
+Thai, Filipino, Hindi, Arabic, Turkish, Japanese, Korean, Chinese.
+
+- **KHÔNG tích (mặc định)** → truyện viết **tiếng Anh** y như trước giờ. Prompt gửi model **y nguyên**,
+  không thêm gì cả → không thể làm hỏng hành vi cũ.
+- **Tích** → chèn chỉ thị ngôn ngữ vào **MỌI lời gọi Writer**, nên **tên truyện, meta title,
+  meta description, keywords, TÊN từng chapter, NỘI DUNG từng chapter và caption Facebook** đều
+  đúng ngôn ngữ đã chọn. Chỉ thị còn **ghi đè mọi câu lệnh "English / American English"** trong
+  prompt gốc (kể cả khi kịch bản/video nguồn là tiếng Anh — phải dịch sang ngôn ngữ đích).
+  Giữ nguyên tên riêng (tên nhân vật, địa danh).
+
+**SỬA LỖI CHẶN QUAN TRỌNG:** trước đây `language` nằm trong `FIXED_PRODUCTION_SETTINGS`, mà
+`apply_fixed_production_settings()` **ghi đè** config → nếu chỉ thêm ô chọn thì mọi lựa chọn đều
+bị **âm thầm ép về `English`**. Đã bỏ ghim `language` khỏi khối đó.
+
+**Đã test:**
+- Không tích → prompt gửi model kết thúc đúng bằng prompt gốc, **không** chèn chỉ thị nào.
+- Tích + Japanese → chỉ thị có mặt ở **cả 5 loại lời gọi** (Story architecture, batch chapter,
+  metadata, Facebook caption, tiêu đề video); prompt gốc đặt **trước**, chỉ thị ngôn ngữ **sau**
+  nên phần ghi đè thắng.
+- Tích + English → không chèn gì (giữ nguyên hành vi cũ).
+- GUI: bật/tắt làm ô chọn chuyển `disabled` ↔ `readonly` đúng; nhãn trạng thái đổi theo.
+- Config MD5 **không đổi** trước/sau test GUI.
 
 ## v23.6.22 — THÊM LOGO YOUTUBE TRÊN ẢNH BÌA WEBSITE (port từ Phong_ADung)
 
@@ -128,8 +156,8 @@ token của `admin` cùng payload → 201. Tầng verify xử lý token của us
 ## BẢN GẦN ĐÂY
 | Bản | Nội dung |
 |---|---|
-| v23.6.22 | **Thêm logo YouTube trên ảnh bìa website** (port nguyên từ Phong_ADung, giống hệt từng byte; mặc định TẮT) |
-| v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) || v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
+| v23.6.23 | **Chọn ngôn ngữ cho truyện** (nút tích + 16 ngôn ngữ ở tab SmartTraffic; áp cho mọi truyện + mọi chapter; không tích = tiếng Anh như cũ) |
+| v23.6.22 | **Thêm logo YouTube trên ảnh bìa website** (port nguyên từ Phong_ADung, giống hệt từng byte; mặc định TẮT) || v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) || v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
 | v23.6.16 | Port phần đăng bài Adsconex sang bản DHue (theo đúng file anh gửi, KHÔNG sửa logic riêng) |
 | v23.6.17 | **Fix TREO khi đăng bài do LỆCH ĐỒNG HỒ** (3 lớp: giờ máy, bỏ mark tương lai, chờ tối đa 25s) |
 | v23.6.19 | **Vá crash PATH** — `configure_ffmpeg()` chỉ thêm ffmpeg vào PATH 1 lần (trước: mỗi video thêm 1 lần → nổ `ValueError` ở ~lần 454) |

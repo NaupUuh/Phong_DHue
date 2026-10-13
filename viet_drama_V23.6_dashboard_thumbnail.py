@@ -364,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.22"
+APP_VERSION = "23.6.23"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -425,7 +425,9 @@ FIXED_PRODUCTION_SETTINGS = {
     "fast_whisper_beam_size": "1",
 
     # Story
-    "language": "English",
+    # "language" KHONG nam o day: nguoi dung chon ngon ngu o tab SmartTraffic.
+    # Neu ghim o day, apply_fixed_production_settings() se ghi de lua chon cua
+    # nguoi dung va luon ep ve "English" ma khong bao gi.
     "fast_story_mode": True,
     "min_story_chapters": "6",
     "max_story_chapters": "10",
@@ -572,7 +574,82 @@ DEFAULT_CONFIG = {
     "cloudinary_workers": "4",
     "ffmpeg_bin": r"C:\\ffmpeg-9.0.1-essentials_build\\bin",
     "keep_frames": False,
+    # Nut tich "Ap ngon ngu da chon": False = mac dinh tieng Anh nhu truoc gio.
+    "language_enabled": False,
 }
+
+# ---------------------------------------------------------------------------
+# NGON NGU BAI VIET (chon o tab SmartTraffic, ap cho MOI truyen + moi chapter)
+# ---------------------------------------------------------------------------
+# Nhan o day chi de hien thi; gia tri luu trong config la KEY (xem ben duoi).
+LANGUAGE_OPTIONS = [
+    ("English", "English"),
+    ("Vietnamese (Tiếng Việt)", "Vietnamese"),
+    ("Spanish (Español)", "Spanish"),
+    ("Portuguese (Português)", "Portuguese"),
+    ("French (Français)", "French"),
+    ("German (Deutsch)", "German"),
+    ("Italian (Italiano)", "Italian"),
+    ("Indonesian (Bahasa Indonesia)", "Indonesian"),
+    ("Thai (ภาษาไทย)", "Thai"),
+    ("Filipino (Tagalog)", "Filipino"),
+    ("Hindi (हिन्दी)", "Hindi"),
+    ("Arabic (العربية)", "Arabic"),
+    ("Turkish (Türkçe)", "Turkish"),
+    ("Japanese (日本語)", "Japanese"),
+    ("Korean (한국어)", "Korean"),
+    ("Chinese (中文)", "Chinese"),
+]
+
+LANGUAGE_KEYS = [key for _label, key in LANGUAGE_OPTIONS]
+LANGUAGE_LABELS = {key: label for label, key in LANGUAGE_OPTIONS}
+LANGUAGE_LABEL_TO_KEY = {label: key for label, key in LANGUAGE_OPTIONS}
+
+
+def language_label(language_key: str) -> str:
+    """Nhan hien thi cua mot ngon ngu; nhan la thi tra ve nguyen van."""
+    key = str(language_key or "").strip()
+    return LANGUAGE_LABELS.get(key, key or "English")
+
+
+def effective_language(cfg) -> str:
+    """Ngon ngu thuc su dung: KHONG tich 'language_enabled' -> luon tieng Anh."""
+    try:
+        enabled = bool((cfg or {}).get("language_enabled", False))
+    except Exception:
+        enabled = False
+    if not enabled:
+        return "English"
+    key = str((cfg or {}).get("language") or "English").strip() or "English"
+    return key if key in LANGUAGE_LABELS else "English"
+
+
+def language_instruction(language_key: str) -> str:
+    """Chi thi ngon ngu, noi vao MOI loi goi Writer.
+
+    Khong co phan nay thi model tu do tra loi bang tieng Anh (theo prompt goc),
+    nen phai nhac ro va nhac lai o tung request: story architecture, tung batch
+    chapter, metadata, Facebook caption va tieu de video.
+    """
+    label = language_label(language_key)
+    if label == "English":
+        # Mac dinh: giu nguyen hanh vi cu, khong them chi thi nao.
+        return ""
+    return (
+        "\n\n# NGON NGU BAT BUOC — AP CHO TOAN BO TRUYEN\n"
+        f"Write EVERYTHING in {label}: the story title, the meta title, the meta description, "
+        f"the keywords, every chapter title, every chapter body, and the Facebook caption.\n"
+        f"VIET TOAN BO BANG {label}: ten truyen, meta title, meta description, keywords, "
+        f"tieu de TUNG chapter, noi dung TUNG chapter va caption Facebook. "
+        f"KHONG duoc tron ngon ngu khac, KHONG giu lai cau tieng Anh nao, KE CA khi nguon "
+        f"(kich ban / hook video) dang la tieng Anh — phai dich va viet lai sang {label}.\n"
+        "Keep proper nouns (character names, place names, brand names) in their original form; "
+        "do not translate them.\n"
+        f"RULES ABOVE THAT MENTION ENGLISH OR AMERICAN ENGLISH ARE OVERRIDDEN: the language to "
+        f"use is {label}.\n"
+        "Chapter headings still use the exact format requested by the tool "
+        f"(the word \"Chapter\" + number), but the chapter TITLE and BODY are written in {label}."
+    )
 
 GUIDE_TEXT = """
 HƯỚNG DẪN VIDEO STORY PUBLISHER
@@ -3297,6 +3374,7 @@ Do not invent unsupported events. Keep chronology. Use neutral role labels if na
             try:
                 client = self._new_writer_client()
                 self._log(f"{label}: API attempt {attempt}/{retries}")
+                lang_note = language_instruction(effective_language(self.cfg))
                 rsp = client.chat.completions.create(
                     model=self.cfg["writer_model"].strip(),
                     messages=[
@@ -3308,6 +3386,7 @@ Do not invent unsupported events. Keep chronology. Use neutral role labels if na
                                 "create the architecture first, then continue without waiting for approval. "
                                 "Return STRICT valid JSON matching the schema in the user request.\n\n"
                                 + self.cfg["story_prompt_text"]
+                                + lang_note
                                 + (
                                     "\n\nAPPROVED VIDEO SCRIPT — LOCKED SOURCE FOR THE HOOK. "
                                     "The chapter scenes and caption must match these characters, "
@@ -5227,6 +5306,11 @@ Return STRICT JSON only:
                                          "size": videos[0].stat().st_size}, ensure_ascii=False, indent=2),
                              encoding="utf-8")
         combined_prompt = self.cfg["story_prompt_text"].strip()
+        # Ghi ro ngon ngu dang ap de con doi chieu ket qua (va luu chung vao
+        # prompt_used.txt ben duoi, de xem lai sau nay tool da chay voi ngon ngu nao).
+        run_language = effective_language(self.cfg)
+        combined_prompt += language_instruction(run_language)
+        self._log(f"Ngôn ngữ áp cho truyện + mọi chapter: {language_label(run_language)}")
         if script:
             combined_prompt += "\n\nAPPROVED VIDEO SCRIPT — LOCKED SOURCE FOR THE HOOK:\n" + script
             _safe_write_text(self.work_dir / "input_script.txt", script, encoding="utf-8")
@@ -6150,16 +6234,45 @@ class App(tk.Tk):
                      values=("<!--nextpage-->", "{{nextpage}}"), state="readonly", width=24).grid(
                          row=5, column=1, sticky="w", pady=4)
 
+        # ------------------------------------------------------------
+        # NGON NGU: ap cho MOI cau chuyen va MOI chapter (khong chi rieng bai nay)
+        # ------------------------------------------------------------
+        self.language_enable_check = ttk.Checkbutton(
+            st,
+            text=("Áp ngôn ngữ đã chọn cho mọi truyện (KHÔNG tích = mặc định tiếng Anh "
+                  "như trước giờ)"),
+            variable=self.vars["language_enabled"],
+            command=self._refresh_language_state,
+        )
+        self.language_enable_check.grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 2))
+
+        ttk.Label(st, text="Ngôn ngữ truyện", width=22).grid(row=7, column=0, sticky="w", pady=4)
+        self.language_combo = ttk.Combobox(
+            st, textvariable=self.vars["language"], values=LANGUAGE_KEYS,
+            state="readonly", width=24
+        )
+        self.language_combo.grid(row=7, column=1, sticky="w", pady=4)
+        # Hien nhan day du (co ca ten ban dia) ben canh ma ngon ngu.
+        self.language_hint = ttk.Label(st, text="", foreground="#555")
+        self.language_hint.grid(row=7, column=2, sticky="w", padx=(8, 0), pady=4)
+
+        self.vars["language"].trace_add("write", lambda *a: self._refresh_language_state())
+        self.vars["language_enabled"].trace_add("write", lambda *a: self._refresh_language_state())
+
+        self.language_note = ttk.Label(st, text="", foreground="#555", wraplength=950)
+        self.language_note.grid(row=8, column=0, columnspan=3, sticky="w", pady=(2, 4))
+        self._refresh_language_state()
+
         ttk.Label(
             st,
             text="Blog.txt luôn dùng {{nextpage}}. API dùng Page break đã chọn; sau khi đăng tool kiểm tra ?c=2."
                  " Nếu trang hiện nguyên dấu ngắt, cần kiểm tra Theme Story trên website.",
             foreground="#555",
             wraplength=950
-        ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 4))
+        ).grid(row=9, column=0, columnspan=3, sticky="w", pady=(8, 4))
 
         st_buttons = ttk.Frame(st)
-        st_buttons.grid(row=7, column=0, columnspan=3, sticky="w", pady=4)
+        st_buttons.grid(row=10, column=0, columnspan=3, sticky="w", pady=4)
         ttk.Button(
             st_buttons,
             text="Mở SmartTraffic API Keys",
@@ -6531,6 +6644,33 @@ class App(tk.Tk):
                 webbrowser.open(out.as_uri())
         except Exception as exc:
             messagebox.showerror(APP_NAME, f"Không tạo được ảnh xem trước: {exc}")
+
+    def _refresh_language_state(self):
+        """Bat/tat o chon ngon ngu theo nut tich; ghi ro dang ap ngon ngu nao."""
+        try:
+            enabled = bool(self.vars["language_enabled"].get())
+        except Exception:
+            enabled = False
+        try:
+            self.language_combo.configure(state="readonly" if enabled else "disabled")
+        except Exception:
+            pass
+        key = str(self.vars["language"].get() or "English").strip() or "English"
+        try:
+            self.language_hint.configure(text=language_label(key) if enabled else "(đang tắt)")
+        except Exception:
+            pass
+        try:
+            if enabled:
+                self.language_note.configure(
+                    text=("Đang áp cho TOÀN BỘ câu chuyện: tiêu đề, meta, TÊN từng chapter, "
+                          f"NỘI DUNG từng chapter và caption Facebook — viết bằng {language_label(key)}. "
+                          "Không trộn ngôn ngữ khác, kể cả khi video/kịch bản gốc là tiếng Anh."))
+            else:
+                self.language_note.configure(
+                    text="Đang TẮT: truyện viết mặc định bằng tiếng Anh như trước giờ.")
+        except Exception:
+            pass
 
     def test_cloudinary(self):
         cfg = self.current_cfg()
