@@ -364,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.28"
+APP_VERSION = "23.6.29"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -1640,13 +1640,28 @@ def find_pending_smarttraffic(output_root) -> list:
         if _smarttraffic_has_published(work_dir):
             continue
         path = smarttraffic_pending_path(work_dir)
-        if not path.is_file():
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8") or "{}")
-        except Exception:
-            continue
-        payload = data.get("payload")
+        payload = None
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8") or "{}")
+            except Exception:
+                data = {}
+            payload = data.get("payload")
+        if not (isinstance(payload, dict) and payload.get("content")):
+            # Lop du phong: bai loi tu BAN CU chua co file pending (chi co
+            # publish_payload_attempt_*.json). Doc lai de cuu bai thay vi bat
+            # nguoi dung chay lai video (ton Vision/Writer).
+            try:
+                for attempt in sorted(work_dir.glob("publish_payload_attempt_*.json")):
+                    try:
+                        cand = json.loads(attempt.read_text(encoding="utf-8") or "{}")
+                    except Exception:
+                        continue
+                    if isinstance(cand, dict) and cand.get("content"):
+                        payload = cand
+                        break
+            except Exception:
+                payload = None
         if isinstance(payload, dict) and payload.get("content"):
             items.append((work_dir, payload))
     return items

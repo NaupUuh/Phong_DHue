@@ -1,11 +1,23 @@
 # TIẾP TỤC — Phong_DHue
 
-**Phiên bản hiện tại: v23.6.28** (cập nhật 2026-10-13)
+**Phiên bản hiện tại: v23.6.29** (cập nhật 2026-10-13)
 
 ## Trạng thái: ĐANG CHẠY ỔN
 - File chính: `viet_drama_V23.6_dashboard_thumbnail.py` (**LF-only**, py_compile OK).
 - GitHub + ổ Z đã đồng bộ (12/12 MD5 khớp).
 - **KHÔNG được ghi đè config thật** — test GUI phải so MD5 trước/sau.
+
+## v23.6.29 — CỨU ĐƯỢC BÀI LỖI SMARTTRAFFIC TỪ BẢN CŨ
+
+`find_pending_smarttraffic()` nay đọc thêm `publish_payload_attempt_*.json` khi work_dir
+**chưa có** file pending. Bản v23.6.28 mới chỉ đọc `publish_pending_smarttraffic.json`, nên
+bài lỗi từ bản cũ **không được nhặt** → phải chạy lại video, tốn Vision/Writer.
+
+**Đã test trên thư mục output THẬT** (`Y:\HQData-2\Dũng dùng drama\AQ test\test\Story Outputs`):
+nhặt được bài **12:20** (chưa lên site), **bỏ qua đúng** bài **11:49** (đã có `publish_result.json`).
+
+⚠️ **Lưu ý:** bài đã lên site nhưng **không có** `publish_result.json` (ví dụ đăng bằng tay/API) vẫn
+có thể bị đăng lại → **sinh bài trùng**. Kiểm tra tên bài trên site trước khi bấm đăng lại.
 
 ## v23.6.28 — SMARTTRAFFIC: LƯU PAYLOAD BÀI LỖI 5xx ĐỂ ĐĂNG LẠI
 
@@ -301,8 +313,8 @@ token của `admin` cùng payload → 201. Tầng verify xử lý token của us
 ## BẢN GẦN ĐÂY
 | Bản | Nội dung |
 |---|---|
-| v23.6.28 | **SmartTraffic: lưu payload bài lỗi 5xx để đăng lại** (trước đây bị mất — nút "Đăng lại bài lỗi" chỉ quét Adsconex) |
-| v23.6.27 | **Fix logo YouTube không bao giờ hiện** (3 key logo bị ghim trong FIXED_PRODUCTION_SETTINGS nên bị ghi đè; đã bỏ ghim — logo áp cho cả SmartTraffic và Adsconex) || v23.6.26 | **Fix SmartTraffic HTTP 500** (lỗi tạm thời phía server; thử lại chính payload đó với giãn cách 20/40/60/80s thay vì gửi 2 lần cách 0,5s) || v23.6.25 | **Fix caption khi chọn ngôn ngữ khác tiếng Anh** (bộ kiểm tra chỉ nhận đại từ tiếng Anh nên loại oan caption tiếng Việt; thêm markers + độ dài + câu nhắc viết lại cho đủ 16 ngôn ngữ) || v23.6.24 | **Ngôn ngữ: bỏ hẳn câu ghim tiếng Anh trong prompt** (tích ngôn ngữ = truyện chỉ theo đúng 1 ngôn ngữ, mặc kệ video gốc; thêm CTA dịch theo ngôn ngữ) || v23.6.23 | **Chọn ngôn ngữ cho truyện** (nút tích + 16 ngôn ngữ ở tab SmartTraffic; áp cho mọi truyện + mọi chapter; không tích = tiếng Anh như cũ) || v23.6.22 | **Thêm logo YouTube trên ảnh bìa website** (port nguyên từ Phong_ADung, giống hệt từng byte; mặc định TẮT) || v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) || v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
+| v23.6.29 | **Cứu bài lỗi SmartTraffic từ bản cũ** (đọc thêm publish_payload_attempt_*.json khi chưa có file pending) |
+| v23.6.28 | **SmartTraffic: lưu payload bài lỗi 5xx để đăng lại** (trước đây bị mất — nút "Đăng lại bài lỗi" chỉ quét Adsconex) || v23.6.27 | **Fix logo YouTube không bao giờ hiện** (3 key logo bị ghim trong FIXED_PRODUCTION_SETTINGS nên bị ghi đè; đã bỏ ghim — logo áp cho cả SmartTraffic và Adsconex) || v23.6.26 | **Fix SmartTraffic HTTP 500** (lỗi tạm thời phía server; thử lại chính payload đó với giãn cách 20/40/60/80s thay vì gửi 2 lần cách 0,5s) || v23.6.25 | **Fix caption khi chọn ngôn ngữ khác tiếng Anh** (bộ kiểm tra chỉ nhận đại từ tiếng Anh nên loại oan caption tiếng Việt; thêm markers + độ dài + câu nhắc viết lại cho đủ 16 ngôn ngữ) || v23.6.24 | **Ngôn ngữ: bỏ hẳn câu ghim tiếng Anh trong prompt** (tích ngôn ngữ = truyện chỉ theo đúng 1 ngôn ngữ, mặc kệ video gốc; thêm CTA dịch theo ngôn ngữ) || v23.6.23 | **Chọn ngôn ngữ cho truyện** (nút tích + 16 ngôn ngữ ở tab SmartTraffic; áp cho mọi truyện + mọi chapter; không tích = tiếng Anh như cũ) || v23.6.22 | **Thêm logo YouTube trên ảnh bìa website** (port nguyên từ Phong_ADung, giống hệt từng byte; mặc định TẮT) || v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) || v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
 | v23.6.16 | Port phần đăng bài Adsconex sang bản DHue (theo đúng file anh gửi, KHÔNG sửa logic riêng) |
 | v23.6.17 | **Fix TREO khi đăng bài do LỆCH ĐỒNG HỒ** (3 lớp: giờ máy, bỏ mark tương lai, chờ tối đa 25s) |
 | v23.6.19 | **Vá crash PATH** — `configure_ffmpeg()` chỉ thêm ffmpeg vào PATH 1 lần (trước: mỗi video thêm 1 lần → nổ `ValueError` ở ~lần 454) |
