@@ -364,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.30"
+APP_VERSION = "23.6.31"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -495,6 +495,138 @@ DEFAULT_FILENAME_PHRASES = "\n".join([
     "SEE HOW IT ALL ENDS",
     "CONTINUE WATCHING HERE",
 ])
+
+# Cau chen trong ten file theo TUNG NGON NGU (dung khi nguoi dung chua tu nhap
+# danh sach rieng trong o 'Cau chien trong ten file'). Ten file la thu hien ra
+# cho nguoi xem, nen phai cung ngon ngu voi truyen.
+DEFAULT_FILENAME_PHRASES_BY_LANGUAGE = {
+    "English": DEFAULT_FILENAME_PHRASES,
+    "Vietnamese": "\n".join([
+        "PHẦN 2 & KẾT THÚC TRỌN BỘ", "XEM PHẦN TIẾP THEO TẠI ĐÂY",
+        "CHUYỆN GÌ XẢY RA TIẾP? XEM TẠI ĐÂY", "XEM TRỌN BỘ PHIM TẠI ĐÂY",
+        "XEM KẾT THÚC NHƯ THẾ NÀO", "XEM TIẾP TẠI ĐÂY",
+    ]),
+    "Spanish": "\n".join([
+        "PARTE 2 Y FINAL COMPLETO", "MIRA LA SIGUIENTE PARTE AQUÍ",
+        "¿QUÉ PASA DESPUÉS? MÍRALO AQUÍ", "MIRA LA HISTORIA COMPLETA AQUÍ",
+        "DESCUBRE CÓMO TERMINA", "SIGUE VIENDO AQUÍ",
+    ]),
+    "Portuguese": "\n".join([
+        "PARTE 2 E FINAL COMPLETO", "ASSISTA À PRÓXIMA PARTE AQUI",
+        "O QUE ACONTECE DEPOIS? VEJA AQUI", "ASSISTA À HISTÓRIA COMPLETA AQUI",
+        "VEJA COMO TERMINA", "CONTINUE ASSISTINDO AQUI",
+    ]),
+    "French": "\n".join([
+        "PARTIE 2 ET FIN COMPLÈTE", "REGARDEZ LA SUITE ICI",
+        "QUE SE PASSE-T-IL ENSUITE ? VOIR ICI", "REGARDEZ L'HISTOIRE COMPLÈTE ICI",
+        "VOYEZ COMMENT ÇA FINIT", "CONTINUEZ À REGARDER ICI",
+    ]),
+    "German": "\n".join([
+        "TEIL 2 & KOMPLETTES ENDE", "HIER DEN NÄCHSTEN TEIL ANSEHEN",
+        "WAS PASSIERT ALS NÄCHSTES? HIER ANSEHEN", "HIER DIE GANZE GESCHICHTE ANSEHEN",
+        "SIEH, WIE ES ENDET", "HIER WEITERSCHAuen",
+    ]),
+    "Italian": "\n".join([
+        "PARTE 2 E FINALE COMPLETO", "GUARDA LA PROSSIMA PARTE QUI",
+        "COSA SUCCEDE DOPO? GUARDA QUI", "GUARDA LA STORIA COMPLETA QUI",
+        "SCOPRI COME FINISCE", "CONTINUA A GUARDARE QUI",
+    ]),
+    "Indonesian": "\n".join([
+        "BAGIAN 2 & AKHIR CERITA", "TONTON BAGIAN SELANJUTNYA DI SINI",
+        "APA YANG TERJADI SELANJUTNYA? TONTON DI SINI", "TONTON CERITA LENGKAPNYA DI SINI",
+        "LIHAT BAGAIMANA AKHIRNYA", "LANJUT TONTON DI SINI",
+    ]),
+    "Thai": "\n".join([
+        "ภาค 2 และตอนจบ", "ดูตอนต่อไปได้ที่นี่",
+        "เกิดอะไรขึ้นต่อ? ดูที่นี่", "ดูเรื่องเต็มได้ที่นี่",
+        "ดูว่าจบอย่างไร", "ดูต่อที่นี่",
+    ]),
+    "Filipino": "\n".join([
+        "PART 2 AT BUONG PAGWAWAKAS", "PANONOORIN ANG SUSUNOD NA BAHAGI DITO",
+        "ANO ANG SUSUNOD? PANOORIN DITO", "PANONOORIN ANG BUONG KUWENTO DITO",
+        "TINGNAN KUNG PAANO NAGWAKAS", "MAGPATULOY SA PANONOOD DITO",
+    ]),
+    "Hindi": "\n".join([
+        "भाग 2 और पूरा अंत", "अगला भाग यहाँ देखें",
+        "आगे क्या हुआ? यहाँ देखें", "पूरी कहानी यहाँ देखें",
+        "देखें कैसे खत्म होता है", "यहाँ देखते रहें",
+    ]),
+    "Arabic": "\n".join([
+        "الجزء 2 والنهاية الكاملة", "شاهد الجزء التالي هنا",
+        "ماذا حدث بعد ذلك؟ شاهد هنا", "شاهد القصة كاملة هنا",
+        "شاهد كيف تنتهي", "تابع المشاهدة هنا",
+    ]),
+    "Turkish": "\n".join([
+        "2. BÖLÜM VE TAM FİNAL", "SONRAKİ BÖLÜMÜ BURADA İZLE",
+        "SONRA NE OLUYOR? BURADA İZLE", "TÜM HİKÂYEYİ BURADA İZLE",
+        "NASIL BİTTİĞİNİ GÖR", "BURADA İZLEMEYE DEVAM ET",
+    ]),
+    "Japanese": "\n".join([
+        "パート2と完全な結末", "続きはこちらで視聴",
+        "この後どうなる？こちらで視聴", "全話はこちらで視聴",
+        "結末を見る", "続きを視聴する",
+    ]),
+    "Korean": "\n".join([
+        "2부와 완전한 결말", "다음 편은 여기서 보기",
+        "그다음엔 어떻게? 여기서 보기", "전체 이야기는 여기서 보기",
+        "결말 보기", "여기서 계속 보기",
+    ]),
+    "Chinese": "\n".join([
+        "第2部分与完整结局", "在这里观看下一部分",
+        "接下来会发生什么？在这里观看", "在这里观看完整故事",
+        "看看结局如何", "在这里继续观看",
+    ]),
+}
+
+
+def fallback_hashtags_for_language(language_key: str) -> list:
+    """Hashtag du phong khi AI khong tra du 3 the.
+
+    Phai la ASCII (khong dau) vi ten file di qua o mang/WebDAV.
+    """
+    lang = str(language_key or "English").strip() or "English"
+    table = {
+        "English": ["#story", "#drama", "#fullstory"],
+        "Vietnamese": ["#truyen", "#tamly", "#fullstory"],
+        "Spanish": ["#historia", "#drama", "#final"],
+        "Portuguese": ["#historia", "#drama", "#final"],
+        "French": ["#histoire", "#drame", "#final"],
+        "German": ["#geschichte", "#drama", "#finale"],
+        "Italian": ["#storia", "#dramma", "#finale"],
+        "Indonesian": ["#cerita", "#drama", "#akhir"],
+        "Thai": ["#story", "#drama", "#ending"],
+        "Filipino": ["#kuwento", "#drama", "#wakas"],
+        "Hindi": ["#kahani", "#drama", "#ending"],
+        "Arabic": ["#story", "#drama", "#ending"],
+        "Turkish": ["#hikaye", "#dram", "#final"],
+        "Japanese": ["#story", "#drama", "#ending"],
+        "Korean": ["#story", "#drama", "#ending"],
+        "Chinese": ["#story", "#drama", "#ending"],
+    }
+    return list(table.get(lang, table["English"]))
+
+
+def filename_phrases_for_language(cfg: dict) -> str:
+    """Danh sach cau chen ten file theo ngon ngu dang chon.
+
+    Neu nguoi dung da tu nhap danh sach trong o 'Cau chien trong ten file' thi
+    uu tien giu nguyen (ton trong y nguoi dung). Chi khi o do VAN LA mac dinh
+    (hoac trong) moi thay bang ban dich cua ngon ngu dang chon.
+    """
+    raw = str((cfg or {}).get("filename_phrase_list") or "").strip()
+    if raw and raw != DEFAULT_FILENAME_PHRASES.strip():
+        return raw
+    lang = effective_language(cfg)
+    return DEFAULT_FILENAME_PHRASES_BY_LANGUAGE.get(lang, DEFAULT_FILENAME_PHRASES)
+
+
+def choose_filename_phrase(cfg: dict) -> str:
+    """Chon ngau nhien 1 cau trong o 'Cau chien trong ten file' (theo ngon ngu)."""
+    import random
+    raw = filename_phrases_for_language(cfg).replace("\r", "\n")
+    lines = [re.sub(r"\s+", " ", ln).strip(" .;") for ln in raw.split("\n")]
+    lines = [ln for ln in lines if ln]
+    return random.choice(lines) if lines else "full story"
 
 DEFAULT_CONFIG = {
     "vilao_base_url": "https://api.vilao.ai/v1",
@@ -1847,14 +1979,6 @@ def active_publish_link(result: dict, cfg: dict) -> str:
         return published_adsconex_link(result, cfg.get("adsconex_site_host", ""))
     return published_article_link(result, cfg.get("site_host", ""))
 
-def choose_filename_phrase(cfg: dict) -> str:
-    """Chọn ngẫu nhiên 1 câu trong ô 'Câu chèn trong tên file'. Trống = 'full story'."""
-    import random
-    raw = str(cfg.get("filename_phrase_list") or "").replace("\r", "\n")
-    lines = [re.sub(r"\s+", " ", ln).strip(" .;") for ln in raw.split("\n")]
-    lines = [ln for ln in lines if ln]
-    return random.choice(lines) if lines else "full story"
-
 def safe_video_filename(post_text: str, article_url: str, suffix: str, max_length: int = 219,
                         phrase: str = "full story") -> str:
     """Limit the entire filename, including extension, to 219 characters.
@@ -1863,9 +1987,15 @@ def safe_video_filename(post_text: str, article_url: str, suffix: str, max_lengt
     safe_url = article_url.replace(":", "").replace("/", "")
     clean_phrase = re.sub(r'[<>:"/\\|?*\x00-\x1f;]', " ", str(phrase or ""))
     clean_phrase = re.sub(r"\s+", " ", clean_phrase).strip(" .;")
-    ending = f";{clean_phrase} {safe_url}" if clean_phrase else f";{safe_url}"
     # Some WebDAV/SMB servers limit UTF-8 bytes, even when Windows reports
     # a character count below 219. Keep the filename ASCII and URL intact.
+    # Cau chen ten file cung phai bo dau: khi chon ngon ngu khac (Tay Ban Nha,
+    # Viet...) cau chien co dau -> de nguyen se pha vo dam bao ASCII cua ten file.
+    clean_phrase = (clean_phrase.replace("\u2019", "'").replace("\u2018", "'")
+                    .replace("\u2014", "-").replace("\u2013", "-"))
+    clean_phrase = unicodedata.normalize("NFKD", clean_phrase).encode("ascii", "ignore").decode("ascii")
+    clean_phrase = re.sub(r"\s+", " ", clean_phrase).strip(" .;")
+    ending = f";{clean_phrase} {safe_url}" if clean_phrase else f";{safe_url}"
     post_text = post_text.replace("’", "'").replace("‘", "'").replace("—", "-").replace("–", "-")
     post_text = unicodedata.normalize("NFKD", post_text).encode("ascii", "ignore").decode("ascii")
     title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", post_text)
@@ -5578,17 +5708,23 @@ Return STRICT JSON only:
         if not link:
             self._log("Chưa nhận được ID bài viết từ API; giữ tên video, không đoán link từ slug.")
             return ""
+        # Ten file video hien ra cho nguoi xem -> phai cung ngon ngu voi truyen.
+        name_lang = language_prompt_name(effective_language(self.cfg))
         try:
             prompt = (
-                "Write one short English Facebook video title based on the actual VIDEO HOOK. "
+                f"Write one short {name_lang} Facebook video title based on the actual VIDEO HOOK. "
                 "Make a specific curiosity gap without revealing the outcome or inventing facts. "
-                "Write a fuller, natural title of about 110-140 characters when the hook has enough detail. "
-                "Add 3 to 5 relevant, short English hashtags. The complete VIDEO FILENAME, including "
-                "hashtags, full story article ID link and .mp4 extension, must stay at or below 219 characters; "
-                "the application will trim the hook first if needed. "
-                "No URLs or semicolons. Return JSON: {\"title\":\"...\",\"hashtags\":[\"#...\",\"#...\",\"#...\"]}.\n"
+                f"Write a fuller, natural title of about 110-140 characters in {name_lang} when the hook has enough detail. "
+                f"Add 3 to 5 relevant, short hashtags written in {name_lang}. "
+                "Hashtags must use plain ASCII letters/digits/underscore only (no accents, no spaces) "
+                "so the filename stays safe on network drives. "
+                "The complete VIDEO FILENAME, including hashtags, full story article ID link and .mp4 extension, "
+                "must stay at or below 219 characters; the application will trim the hook first if needed. "
+                f"No URLs or semicolons. The title and hashtags MUST be in {name_lang}, NOT in English. "
+                "Return JSON: {\"title\":\"...\",\"hashtags\":[\"#...\",\"#...\",\"#...\"]}.\n"
                 + json.dumps({"video_script": script[:3500], "story_title": story.get("title", ""),
-                              "caption_start": str(story.get("facebook_caption", ""))[:650]}, ensure_ascii=False)
+                              "caption_start": str(story.get("facebook_caption", ""))[:650],
+                              "required_language": name_lang}, ensure_ascii=False)
             )
             generated = self._writer_json_call("Facebook video title", prompt, max_tokens=250)
             title = re.sub(r"[;#\r\n]+", " ", str(generated.get("title") or ""))
@@ -5599,13 +5735,13 @@ Return STRICT JSON only:
             tags = ["#" + m.group(1) for tag in tags if (m := re.fullmatch(r"#?([A-Za-z0-9_]{2,25})", str(tag).strip()))]
             tags = list(dict.fromkeys(tags))[:5]
             if len(tags) < 3:
-                tags = ["#story", "#drama", "#fullstory"]
+                tags = fallback_hashtags_for_language(effective_language(self.cfg))
             if not title:
                 raise ValueError("AI returned an empty title")
         except Exception as exc:
             self._log(f"Không tạo được tên bằng AI ({exc}); dùng tiêu đề bài viết.")
             title = re.sub(r"[;#\r\n]+", " ", str(story.get("title") or video.stem)).strip()[:160]
-            tags = ["#story", "#drama", "#fullstory"]
+            tags = fallback_hashtags_for_language(effective_language(self.cfg))
         post_text = f"{title} {' '.join(tags)}"
         phrase = choose_filename_phrase(self.cfg)
         exact_text = f"{post_text};{phrase} {link}"
@@ -7088,6 +7224,23 @@ class App(tk.Tk):
             else:
                 self.language_note.configure(
                     text="Đang TẮT: truyện viết mặc định bằng tiếng Anh như trước giờ.")
+        except Exception:
+            pass
+
+        # O 'Cau chien trong ten file' cung phai theo ngon ngu (ten file hien ra
+        # cho nguoi xem). Chi thay khi o do VAN LA MAC DINH de khong lam mat ban
+        # nguoi dung tu nhap.
+        try:
+            editor = getattr(self, "filename_phrase_editor", None)
+            if editor is not None:
+                current = editor.get("1.0", "end-1c").strip()
+                is_default = (not current) or (current == DEFAULT_FILENAME_PHRASES.strip())
+                if is_default:
+                    wanted = filename_phrases_for_language(
+                        {"language": key, "language_enabled": enabled}).strip()
+                    if current != wanted:
+                        editor.delete("1.0", "end")
+                        editor.insert("1.0", wanted)
         except Exception:
             pass
 
