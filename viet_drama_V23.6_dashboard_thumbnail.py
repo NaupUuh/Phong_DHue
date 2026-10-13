@@ -364,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.31"
+APP_VERSION = "23.6.32"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -606,15 +606,34 @@ def fallback_hashtags_for_language(language_key: str) -> list:
     return list(table.get(lang, table["English"]))
 
 
+# Tap hop MOI danh sach mac dinh (moi ngon ngu). Dung de phan biet "tool tu dien"
+# voi "nguoi dung tu nhap": neu o dang chua dung mot trong cac ban mac dinh nay thi
+# coi nhu tool quan ly -> phai doi theo ngon ngu dang chon.
+_ALL_DEFAULT_PHRASE_SETS = {
+    "\n".join(re.sub(r"\s+", " ", ln).strip(" .;") for ln in v.split("\n") if ln.strip())
+    for v in DEFAULT_FILENAME_PHRASES_BY_LANGUAGE.values()
+}
+_ALL_DEFAULT_PHRASE_SETS.add(
+    "\n".join(re.sub(r"\s+", " ", ln).strip(" .;") for ln in DEFAULT_FILENAME_PHRASES.split("\n") if ln.strip()))
+
+
+def _is_default_phrase_list(raw: str) -> bool:
+    """True khi o 'Cau chien trong ten file' dang chua ban mac dinh (cua BAT KY
+    ngon ngu nao) hoac de trong -> tool duoc phep tu doi theo ngon ngu."""
+    norm = "\n".join(re.sub(r"\s+", " ", ln).strip(" .;")
+                     for ln in str(raw or "").replace("\r", "\n").split("\n") if ln.strip())
+    return (not norm) or (norm in _ALL_DEFAULT_PHRASE_SETS)
+
+
 def filename_phrases_for_language(cfg: dict) -> str:
     """Danh sach cau chen ten file theo ngon ngu dang chon.
 
-    Neu nguoi dung da tu nhap danh sach trong o 'Cau chien trong ten file' thi
-    uu tien giu nguyen (ton trong y nguoi dung). Chi khi o do VAN LA mac dinh
-    (hoac trong) moi thay bang ban dich cua ngon ngu dang chon.
+    Neu nguoi dung da TU NHAP danh sach rieng thi giu nguyen (ton trong y nguoi
+    dung). Neu o dang chua ban mac dinh cua bat ky ngon ngu nao (ke ca ban da bi
+    luu tu lan doi ngon ngu truoc) thi tra ve ban dung ngon ngu dang chon.
     """
     raw = str((cfg or {}).get("filename_phrase_list") or "").strip()
-    if raw and raw != DEFAULT_FILENAME_PHRASES.strip():
+    if raw and not _is_default_phrase_list(raw):
         return raw
     lang = effective_language(cfg)
     return DEFAULT_FILENAME_PHRASES_BY_LANGUAGE.get(lang, DEFAULT_FILENAME_PHRASES)
@@ -7234,8 +7253,9 @@ class App(tk.Tk):
             editor = getattr(self, "filename_phrase_editor", None)
             if editor is not None:
                 current = editor.get("1.0", "end-1c").strip()
-                is_default = (not current) or (current == DEFAULT_FILENAME_PHRASES.strip())
-                if is_default:
+                # Chi tu doi khi o dang chua ban mac dinh (cua bat ky ngon ngu nao).
+                # Neu nguoi dung da tu nhap thi GIU NGUYEN.
+                if _is_default_phrase_list(current):
                     wanted = filename_phrases_for_language(
                         {"language": key, "language_enabled": enabled}).strip()
                     if current != wanted:

@@ -1,11 +1,33 @@
 # TIẾP TỤC — Phong_DHue
 
-**Phiên bản hiện tại: v23.6.31** (cập nhật 2026-10-13)
+**Phiên bản hiện tại: v23.6.32** (cập nhật 2026-10-13)
 
 ## Trạng thái: ĐANG CHẠY ỔN
 - File chính: `viet_drama_V23.6_dashboard_thumbnail.py` (**LF-only**, py_compile OK).
 - GitHub + ổ Z đã đồng bộ (12/12 MD5 khớp).
 - **KHÔNG được ghi đè config thật** — test GUI phải so MD5 trước/sau.
+
+## v23.6.32 — FIX CÂU CHÈN TÊN FILE BỊ LỆCH NGÔN NGỮ
+
+**Triệu chứng:** chọn tiếng Tây Ban Nha nhưng tên file vẫn có câu chèn **tiếng Việt**
+(`XEM TRON BO PHIM TAI AY`).
+
+**Nguyên nhân:** khi đổi ngôn ngữ, tool **tự điền** danh sách câu chèn vào ô "Câu chèn trong tên file".
+Lần **Save Settings** sau đó ghi danh sách đó vào config **như thể người dùng tự nhập**. Lần chạy sau,
+`filename_phrases_for_language()` thấy danh sách **khác** bản mặc định tiếng Anh → tưởng là bản riêng của
+người dùng → **giữ nguyên** → câu chèn tiếng Việt cũ đi theo mãi.
+
+**Cách sửa:** thêm `_is_default_phrase_list()` — nhận diện bản mặc định của **bất kỳ ngôn ngữ nào** (16 bản).
+Khi ô đang chứa bản mặc định (kể cả bản đã bị lưu từ lần đổi ngôn ngữ trước) thì luôn trả về bản đúng
+**ngôn ngữ đang chọn**. Bản người dùng **tự nhập** vẫn được giữ nguyên.
+
+**Đã test:**
+- Config thật đang lưu bản tiếng Việt → đổi sang `Spanish` trả về `MIRA LA HISTORIA COMPLETA AQUI` ✓
+- 16/16 ngôn ngữ trả đúng bản của mình ✓
+- Bản tự nhập được giữ nguyên ✓
+- GUI: đổi ngôn ngữ thì ô "Câu chèn trong tên file" **tự đổi**, hết tiếng Việt ✓
+
+**Kết quả thật:** `Su hijo lloraba mama en el pasillo y ella hizo algo que nadie esperaba #historia #drama #final;MIRA LA HISTORIA COMPLETA AQUI httpsdrama.viralstory.bizarticle110684.mp4`
 
 ## v23.6.31 — ĐỔI TÊN FILE VIDEO THEO NGÔN NGỮ ĐÃ CHỌN
 
@@ -367,8 +389,8 @@ token của `admin` cùng payload → 201. Tầng verify xử lý token của us
 ## BẢN GẦN ĐÂY
 | Bản | Nội dung |
 |---|---|
-| v23.6.31 | **Đổi tên file video theo ngôn ngữ** (prompt + hashtag + câu chèn tên file theo ngôn ngữ; bỏ dấu để tên file ASCII) |
-| v23.6.30 | **Fix caption bị loại oan ở ngôn ngữ pro-drop** (Tây Ban Nha/Ý/Bồ bỏ đại từ nên bị loại; thêm FIRST_PERSON_VERBS + xét 2 đoạn đầu) || v23.6.29 | **Cứu bài lỗi SmartTraffic từ bản cũ** (đọc thêm publish_payload_attempt_*.json khi chưa có file pending) || v23.6.28 | **SmartTraffic: lưu payload bài lỗi 5xx để đăng lại** (trước đây bị mất — nút "Đăng lại bài lỗi" chỉ quét Adsconex) || v23.6.27 | **Fix logo YouTube không bao giờ hiện** (3 key logo bị ghim trong FIXED_PRODUCTION_SETTINGS nên bị ghi đè; đã bỏ ghim — logo áp cho cả SmartTraffic và Adsconex) || v23.6.26 | **Fix SmartTraffic HTTP 500** (lỗi tạm thời phía server; thử lại chính payload đó với giãn cách 20/40/60/80s thay vì gửi 2 lần cách 0,5s) || v23.6.25 | **Fix caption khi chọn ngôn ngữ khác tiếng Anh** (bộ kiểm tra chỉ nhận đại từ tiếng Anh nên loại oan caption tiếng Việt; thêm markers + độ dài + câu nhắc viết lại cho đủ 16 ngôn ngữ) || v23.6.24 | **Ngôn ngữ: bỏ hẳn câu ghim tiếng Anh trong prompt** (tích ngôn ngữ = truyện chỉ theo đúng 1 ngôn ngữ, mặc kệ video gốc; thêm CTA dịch theo ngôn ngữ) || v23.6.23 | **Chọn ngôn ngữ cho truyện** (nút tích + 16 ngôn ngữ ở tab SmartTraffic; áp cho mọi truyện + mọi chapter; không tích = tiếng Anh như cũ) || v23.6.22 | **Thêm logo YouTube trên ảnh bìa website** (port nguyên từ Phong_ADung, giống hệt từng byte; mặc định TẮT) || v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) || v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
+| v23.6.32 | **Fix câu chèn tên file lệch ngôn ngữ** (tool tự điền rồi lưu như bản người dùng nên giữ tiếng Việt cũ; thêm nhận diện bản mặc định mọi ngôn ngữ) |
+| v23.6.31 | **Đổi tên file video theo ngôn ngữ** (prompt + hashtag + câu chèn tên file theo ngôn ngữ; bỏ dấu để tên file ASCII) || v23.6.30 | **Fix caption bị loại oan ở ngôn ngữ pro-drop** (Tây Ban Nha/Ý/Bồ bỏ đại từ nên bị loại; thêm FIRST_PERSON_VERBS + xét 2 đoạn đầu) || v23.6.29 | **Cứu bài lỗi SmartTraffic từ bản cũ** (đọc thêm publish_payload_attempt_*.json khi chưa có file pending) || v23.6.28 | **SmartTraffic: lưu payload bài lỗi 5xx để đăng lại** (trước đây bị mất — nút "Đăng lại bài lỗi" chỉ quét Adsconex) || v23.6.27 | **Fix logo YouTube không bao giờ hiện** (3 key logo bị ghim trong FIXED_PRODUCTION_SETTINGS nên bị ghi đè; đã bỏ ghim — logo áp cho cả SmartTraffic và Adsconex) || v23.6.26 | **Fix SmartTraffic HTTP 500** (lỗi tạm thời phía server; thử lại chính payload đó với giãn cách 20/40/60/80s thay vì gửi 2 lần cách 0,5s) || v23.6.25 | **Fix caption khi chọn ngôn ngữ khác tiếng Anh** (bộ kiểm tra chỉ nhận đại từ tiếng Anh nên loại oan caption tiếng Việt; thêm markers + độ dài + câu nhắc viết lại cho đủ 16 ngôn ngữ) || v23.6.24 | **Ngôn ngữ: bỏ hẳn câu ghim tiếng Anh trong prompt** (tích ngôn ngữ = truyện chỉ theo đúng 1 ngôn ngữ, mặc kệ video gốc; thêm CTA dịch theo ngôn ngữ) || v23.6.23 | **Chọn ngôn ngữ cho truyện** (nút tích + 16 ngôn ngữ ở tab SmartTraffic; áp cho mọi truyện + mọi chapter; không tích = tiếng Anh như cũ) || v23.6.22 | **Thêm logo YouTube trên ảnh bìa website** (port nguyên từ Phong_ADung, giống hệt từng byte; mặc định TẮT) || v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) || v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
 | v23.6.16 | Port phần đăng bài Adsconex sang bản DHue (theo đúng file anh gửi, KHÔNG sửa logic riêng) |
 | v23.6.17 | **Fix TREO khi đăng bài do LỆCH ĐỒNG HỒ** (3 lớp: giờ máy, bỏ mark tương lai, chờ tối đa 25s) |
 | v23.6.19 | **Vá crash PATH** — `configure_ffmpeg()` chỉ thêm ffmpeg vào PATH 1 lần (trước: mỗi video thêm 1 lần → nổ `ValueError` ở ~lần 454) |
