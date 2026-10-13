@@ -364,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.27"
+APP_VERSION = "23.6.28"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -1244,6 +1244,11 @@ def _adsconex_wait_for_slot(cfg, log=None) -> str:
 # "Dang lai bai loi" trong tab Adsconex.
 ADSCONEX_PENDING_FILE = "publish_pending_adsconex.json"
 
+# SmartTraffic: luu payload bai loi 5xx xuong work_dir de dang lai sau.
+# Truoc day bai SmartTraffic loi 5xx bi mat (khong co file pending), chi con
+# publish_payload_attempt_*.json nen nut "Dang lai bai loi" khong nhat duoc.
+SMARTTRAFFIC_PENDING_FILE = "publish_pending_smarttraffic.json"
+
 # Circuit breaker: origin Cloudflare sap HANG GIO thi retry 3 lan x 60/120s cho moi bai
 # chi lam batch cham them hang gio ma khong cuu duoc bai nao. Bien nay la TRANG THAI CHUNG
 # ca tien trinh (batch tao StoryPipeline moi cho moi video, thuoc tinh instance se bi reset).
@@ -1578,6 +1583,73 @@ def adsconex_series_exists(cfg, slug) -> bool:
                     and safe_int((body.get("series") or {}).get("id"), 0))
     except Exception:
         return False
+
+
+def smarttraffic_pending_path(work_dir):
+    return Path(work_dir) / SMARTTRAFFIC_PENDING_FILE
+
+
+def smarttraffic_write_pending(work_dir, payload: dict, status, detail: str = "") -> None:
+    """Ghi payload bai SmartTraffic loi 5xx de lan sau dang lai (khong ton Vision/Writer)."""
+    if not work_dir or not isinstance(payload, dict) or not payload.get("content"):
+        return
+    try:
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        record = {
+            "http_status": status,
+            "detail": str(detail)[:800],
+            "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "machine": platform.node(),
+            "payload": payload,
+        }
+        smarttraffic_pending_path(work_dir).write_text(
+            json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def smarttraffic_clear_pending(work_dir) -> None:
+    try:
+        smarttraffic_pending_path(work_dir).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _smarttraffic_has_published(work_dir) -> bool:
+    """Bai nay da dang duoc chua (co publish_result.json voi url)?"""
+    try:
+        data = json.loads((Path(work_dir) / "publish_result.json").read_text(encoding="utf-8") or "{}")
+        return bool(str(data.get("url") or "").strip())
+    except Exception:
+        return False
+
+
+def find_pending_smarttraffic(output_root) -> list:
+    """Liet ke [(work_dir, payload)] cua cac bai SmartTraffic tung loi va CHUA dang duoc.
+
+    Duyet tu CU den MOI de bai cu duoc dang truoc (giu thu tu tren website).
+    """
+    items = []
+    try:
+        root = Path(output_root)
+    except Exception:
+        return items
+    if not root.is_dir():
+        return items
+    for work_dir in sorted(root.glob("_story_output_*"), key=lambda x: x.name):
+        if _smarttraffic_has_published(work_dir):
+            continue
+        path = smarttraffic_pending_path(work_dir)
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8") or "{}")
+        except Exception:
+            continue
+        payload = data.get("payload")
+        if isinstance(payload, dict) and payload.get("content"):
+            items.append((work_dir, payload))
+    return items
 
 
 def find_pending_adsconex(output_root, cfg=None) -> list:
@@ -5129,6 +5201,7 @@ Return STRICT JSON only:
                         "Đã đăng 1 bài duy nhất (giữ nguyên); KHÔNG retry để tránh duplicate. "
                         "Hãy kiểm tra theme 'story' trên website hoặc sửa bài trong CMS."
                     )
+                smarttraffic_clear_pending(self.work_dir)
                 self._step_end("SmartTraffic publish")
                 return data
 
@@ -5141,11 +5214,117 @@ Return STRICT JSON only:
             # Da thu lai het luot ma van 5xx: DUNG lai, KHONG thu payload rut gon
             # nua. Payload rut gon dung CUNG slug nen de sinh bai trung/-2 tren
             # website. Nguoi dung bam "Dang lai bai loi" khi server da hoi.
-            self._log("Đã thử lại đủ số lần mà server vẫn lỗi 5xx; dừng để tránh tạo bài trùng. "
-                      "Chờ vài phút rồi dùng nút đăng lại bài lỗi.")
+            # LUU payload de lan sau dang lai (khong ton Vision/Writer). Truoc day
+            # bai SmartTraffic loi 5xx bi mat, khong co file pending nao.
+            smarttraffic_write_pending(self.work_dir, payload, r.status_code, str(data))
+            self._log("Đã lưu payload để đăng lại sau. Đã thử lại đủ số lần mà server vẫn lỗi 5xx; "
+                      "dừng để tránh tạo bài trùng. Chờ vài phút rồi bấm nút đăng lại bài lỗi.")
             break
 
         raise RuntimeError(f"{last_error}\n\nRequest/response debug đã được lưu trong output folder.")
+
+    def republish_pending_smarttraffic(self, work_dir, payload: dict) -> dict:
+        """Dang lai payload SmartTraffic da luu khi 5xx. KHONG ton Vision/Writer.
+
+        Dung lai story.json trong work_dir de doi ten video sau khi dang thanh cong
+        (giong ban Adsconex). Tra dict ket qua, hoac {} khi van loi.
+        """
+        work_dir = Path(work_dir)
+        previous_work_dir = getattr(self, "work_dir", None)
+        self.work_dir = work_dir
+        try:
+            api_key = str(self.cfg.get("smarttraffic_api_key") or "").strip()
+            if not api_key:
+                raise RuntimeError("SmartTraffic API key is empty.")
+            headers = {
+                "Accept": "application/json",
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            self.check_publish_site(headers)
+            endpoint = "https://apiv3.smarttraffic.app/api/publish/articles"
+
+            try:
+                retry_count = max(0, min(int(str(self.cfg.get("smarttraffic_retry_count", "4")).strip() or "4"), 10))
+            except Exception:
+                retry_count = 4
+            try:
+                retry_delay = max(1, min(int(str(self.cfg.get("smarttraffic_retry_delay", "20")).strip() or "20"), 300))
+            except Exception:
+                retry_delay = 20
+
+            r = requests.post(endpoint, headers=headers, json=payload, timeout=120)
+            round_no = 0
+            while r.status_code >= 500 and round_no < retry_count:
+                round_no += 1
+                wait = retry_delay * round_no
+                self._log(f"[{work_dir.name}] SmartTraffic HTTP {r.status_code} | "
+                          f"gửi lại {round_no}/{retry_count} sau {wait}s")
+                time.sleep(wait)
+                r = requests.post(endpoint, headers=headers, json=payload, timeout=120)
+
+            try:
+                data = r.json()
+            except Exception:
+                data = {"raw": r.text}
+
+            if r.status_code not in (200, 201):
+                smarttraffic_write_pending(work_dir, payload, r.status_code, str(data))
+                self._log(f"[{work_dir.name}] vẫn lỗi HTTP {r.status_code}; giữ payload để thử tiếp.")
+                return {}
+
+            smarttraffic_clear_pending(work_dir)
+            url = ""
+            if isinstance(data, dict):
+                url = str(data.get("url") or "").strip()
+                nested = data.get("data")
+                if not url and isinstance(nested, dict):
+                    url = str(nested.get("url") or nested.get("article_url") or "").strip()
+            publish_result = {
+                "url": url,
+                "http_status": r.status_code,
+                "provider": "SmartTraffic",
+                "response": data,
+                "republished_from_pending": True,
+                "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            try:
+                _safe_write_text(work_dir / "publish_result.json",
+                                 json.dumps(publish_result, ensure_ascii=False, indent=2),
+                                 encoding="utf-8")
+            except Exception:
+                pass
+            self._log(f"[{work_dir.name}] DA DANG LAI | HTTP {r.status_code} | url={url}")
+
+            # Doi ten video (chi khi dang thanh cong va video goc con nguyen ten).
+            story = {}
+            try:
+                story_path = work_dir / "story.json"
+                if story_path.is_file():
+                    story = json.loads(story_path.read_text(encoding="utf-8") or "{}")
+            except Exception:
+                story = {}
+            video_path = None
+            try:
+                src = work_dir / "source_video.json"
+                if src.is_file():
+                    info = json.loads(src.read_text(encoding="utf-8") or "{}")
+                    video_path = Path(str(info.get("path") or ""))
+            except Exception:
+                video_path = None
+            renamed = ""
+            if isinstance(story, dict) and story and video_path is not None and video_path.is_file():
+                script_path = work_dir / "video_script.txt"
+                script_text = script_path.read_text(encoding="utf-8") if script_path.is_file() else ""
+                try:
+                    renamed = self.rename_published_video(video_path, story, publish_result, script_text)
+                except Exception as exc:
+                    self._log(f"[{work_dir.name}] Dang OK nhung doi ten video loi: {exc}")
+
+            return {"work_dir": str(work_dir), "story": story,
+                    "publish_result": publish_result, "renamed_video": renamed}
+        finally:
+            self.work_dir = previous_work_dir
 
     def republish_pending(self, work_dir, payload: dict, resume: dict = None) -> dict:
         """Dang lai payload da luu cua bai loi 502. KHONG ton Vision/Writer.
@@ -7417,24 +7596,36 @@ class App(tk.Tk):
             messagebox.showinfo(APP_NAME, "Chọn folder batch vào ô đường dẫn trước, rồi bấm lại.")
             return
         cfg = self.current_cfg()
-        if not str(cfg.get("net_provider") or "").strip().lower().startswith("ads"):
-            messagebox.showwarning(APP_NAME, "Mục 'Net đăng bài' phải là Adsconex mới đăng lại được.")
-            return
-        if not str(cfg.get("adsconex_api_key") or "").strip():
-            messagebox.showwarning(APP_NAME, "Chưa nhập Adsconex API Token trong tab Adsconex.")
-            return
+        use_ads = str(cfg.get("net_provider") or "").strip().lower().startswith("ads")
         output_root = folder / "Story Outputs"
-        pending = find_pending_adsconex(output_root, cfg)
-        if not pending:
+
+        # Nhat CA HAI net: Adsconex va SmartTraffic deu luu payload bai loi 5xx.
+        pending_ads = []
+        pending_st = []
+        if use_ads:
+            if not str(cfg.get("adsconex_api_key") or "").strip():
+                messagebox.showwarning(APP_NAME, "Chưa nhập Adsconex API Token trong tab Adsconex.")
+                return
+            pending_ads = find_pending_adsconex(output_root, cfg)
+        else:
+            if not str(cfg.get("smarttraffic_api_key") or "").strip():
+                messagebox.showwarning(APP_NAME, "Chưa nhập SmartTraffic API Key trong tab SmartTraffic.")
+                return
+            pending_st = find_pending_smarttraffic(output_root)
+
+        total = len(pending_ads) + len(pending_st)
+        if not total:
             messagebox.showinfo(APP_NAME, f"Không có bài lỗi nào cần đăng lại trong:\n{output_root}")
             return
+        net_name = "Adsconex" if use_ads else "SmartTraffic"
         if not messagebox.askyesno(
             APP_NAME,
-            f"Tìm thấy {len(pending)} bài lỗi đã lưu payload trong:\n{output_root}\n\n"
+            f"Tìm thấy {total} bài lỗi đã lưu payload trong:\n{output_root}\n\n"
+            f"(net đang chọn: {net_name})\n\n"
             "Đăng lại ngay? (không tốn Vision/Writer, video tự đổi tên nếu đăng được)"
         ):
             return
-        self.log(f"DANG LAI BAI LOI: {len(pending)} bai trong {output_root}")
+        self.log(f"DANG LAI BAI LOI ({net_name}): {total} bai trong {output_root}")
         self.run_btn.config(state="disabled")
 
         def worker():
@@ -7443,9 +7634,14 @@ class App(tk.Tk):
             retry_cfg = dict(cfg)
             retry_cfg["story_output_root"] = str(output_root)
             pipe = StoryPipeline(retry_cfg, self.log, self.progress)
-            for work_dir, payload, resume in pending:
+            jobs = ([(wd, pl, rs) for wd, pl, rs in pending_ads] if use_ads
+                    else [(wd, pl, None) for wd, pl in pending_st])
+            for work_dir, payload, resume in jobs:
                 try:
-                    res = pipe.republish_pending(work_dir, payload, resume)
+                    if use_ads:
+                        res = pipe.republish_pending(work_dir, payload, resume)
+                    else:
+                        res = pipe.republish_pending_smarttraffic(work_dir, payload)
                 except Exception as exc:
                     res = {}
                     self.log(f"[{work_dir.name}] LOI: {exc}")
@@ -7595,13 +7791,18 @@ class App(tk.Tk):
                                         f"Đã xử lý {len(rows)}/{len(sources)} | Lỗi {sum(r['status']=='failed' for r in rows)}"))
                     # ---- Dang lai cac bai 502 da luu payload (cuoi batch, origin da hoi) ----
                     # Khong ton Vision/Writer: chi gui lai dung payload da luu.
+                    # Nhat CA HAI net: Adsconex + SmartTraffic (moi net co file pending rieng).
+                    _use_ads = str(cfg.get("net_provider") or "").strip().lower().startswith("ads")
                     try:
-                        pending = find_pending_adsconex(output_root, cfg)
+                        if _use_ads:
+                            pending = [(wd, pl, rs) for wd, pl, rs in find_pending_adsconex(output_root, cfg)]
+                        else:
+                            pending = [(wd, pl, None) for wd, pl in find_pending_smarttraffic(output_root)]
                     except Exception:
                         pending = []
                     if pending:
                         self.log(f"BATCH: dang lai {len(pending)} bai loi da luu payload "
-                                 f"(khong ton Vision/Writer)...")
+                                 f"({'Adsconex' if _use_ads else 'SmartTraffic'}, khong ton Vision/Writer)...")
                         retry_cfg = dict(cfg)
                         retry_cfg["story_output_root"] = str(output_root)
                         retry_pipe = StoryPipeline(retry_cfg, self.log, lambda *args: None)
@@ -7609,7 +7810,10 @@ class App(tk.Tk):
                         stuck = 0
                         for work_dir, payload, resume in pending:
                             try:
-                                res = retry_pipe.republish_pending(work_dir, payload, resume)
+                                if _use_ads:
+                                    res = retry_pipe.republish_pending(work_dir, payload, resume)
+                                else:
+                                    res = retry_pipe.republish_pending_smarttraffic(work_dir, payload)
                             except Exception as exc:
                                 self.log(f"[{work_dir.name}] Dang lai loi: {exc}")
                                 res = {}
