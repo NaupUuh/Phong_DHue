@@ -364,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.26"
+APP_VERSION = "23.6.27"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -446,10 +446,9 @@ FIXED_PRODUCTION_SETTINGS = {
     "facebook_thumbnail_mode": True,
     "thumbnail_width": "290",
     "thumbnail_height": "290",
-    # Logo YouTube ve them o giua anh bia website (mac dinh TAT).
-    "youtube_badge_on_cover": False,
-    "youtube_badge_style": "play",
-    "youtube_badge_scale": "30",
+    # Logo YouTube: KHONG ghim o day. Nguoi dung bat/tat va chinh kieu/kich thuoc
+    # o tab Image hosting. Neu ghim o day, apply_fixed_production_settings() se
+    # GHI DE lua chon cua nguoi dung -> logo KHONG BAO GIO hien du da tich.
     "cloudinary_workers": "4",
     "require_thumbnail_before_publish": True,
 }

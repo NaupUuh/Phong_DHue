@@ -1,11 +1,40 @@
 # TIẾP TỤC — Phong_DHue
 
-**Phiên bản hiện tại: v23.6.26** (cập nhật 2026-10-13)
+**Phiên bản hiện tại: v23.6.27** (cập nhật 2026-10-13)
 
 ## Trạng thái: ĐANG CHẠY ỔN
 - File chính: `viet_drama_V23.6_dashboard_thumbnail.py` (**LF-only**, py_compile OK).
 - GitHub + ổ Z đã đồng bộ (12/12 MD5 khớp).
 - **KHÔNG được ghi đè config thật** — test GUI phải so MD5 trước/sau.
+
+## v23.6.27 — FIX LOGO YOUTUBE KHÔNG BAO GIỜ HIỆN (dù đã tích)
+
+**Triệu chứng:** bật "Vẽ logo YouTube", lưu, chạy xong — ảnh bìa đăng lên **không có logo**.
+
+**Nguyên nhân:** 3 key logo bị đặt trong `FIXED_PRODUCTION_SETTINGS`, mà
+`apply_fixed_production_settings()` **GHI ĐÈ** config. Nên mọi lựa chọn đều bị ép về
+`False` / `play` / `30`.
+
+**Đã đo (bằng chứng):**
+- Tích `on_cover=True`, `style=logo`, `scale=45` → sau `apply` vẫn là `False` / `play` / `30`
+- `_youtube_badge_settings()` trả `('', 0.0)` = **TẮT**
+- Ảnh bìa thật đã đăng: **0 pixel đỏ** → không có logo
+
+**Cách sửa:** bỏ 3 key khỏi `FIXED_PRODUCTION_SETTINGS`, giữ ở `DEFAULT_CONFIG` làm mặc định.
+
+**Đã test sau khi sửa:**
+- Tích `on_cover=True` → giữ nguyên `True`; `style=logo` → giữ `logo`; `scale=45` → giữ `45`
+- `_youtube_badge_settings()` → `('logo', 0.45)`
+- Ảnh bìa có logo thật: **10.574 px nút đỏ** ở kích thước 45%; cả kiểu `play` lẫn `logo` đều vẽ được
+- GUI: 3 widget logo hiện đúng, `current_cfg()` lưu được `True`/`logo`/`45`
+- Không tích → vẫn TẮT như cũ
+- Config MD5 **không đổi** trước/sau test GUI
+
+**Logo áp cho CẢ HAI net** (không cần cấu hình riêng): SmartTraffic dùng `thumbnailUrl`,
+Adsconex dùng `feature_image` — cả hai đều lấy từ `story["thumbnail_url"]` = **ảnh bìa đã vẽ logo**.
+Chỉ cần tích 1 lần là cả hai net đều có.
+
+**Kèm theo:** chuyển file về **LF-only** (lần merge trước làm file thành CRLF).
 
 ## v23.6.26 — FIX SmartTraffic HTTP 500 (lỗi TẠM THỜI, không phải lỗi nội dung)
 
@@ -242,8 +271,8 @@ token của `admin` cùng payload → 201. Tầng verify xử lý token của us
 ## BẢN GẦN ĐÂY
 | Bản | Nội dung |
 |---|---|
-| v23.6.26 | **Fix SmartTraffic HTTP 500** (lỗi tạm thời phía server; thử lại chính payload đó với giãn cách 20/40/60/80s thay vì gửi 2 lần cách 0,5s) |
-| v23.6.25 | **Fix caption khi chọn ngôn ngữ khác tiếng Anh** (bộ kiểm tra chỉ nhận đại từ tiếng Anh nên loại oan caption tiếng Việt; thêm markers + độ dài + câu nhắc viết lại cho đủ 16 ngôn ngữ) || v23.6.24 | **Ngôn ngữ: bỏ hẳn câu ghim tiếng Anh trong prompt** (tích ngôn ngữ = truyện chỉ theo đúng 1 ngôn ngữ, mặc kệ video gốc; thêm CTA dịch theo ngôn ngữ) || v23.6.23 | **Chọn ngôn ngữ cho truyện** (nút tích + 16 ngôn ngữ ở tab SmartTraffic; áp cho mọi truyện + mọi chapter; không tích = tiếng Anh như cũ) || v23.6.22 | **Thêm logo YouTube trên ảnh bìa website** (port nguyên từ Phong_ADung, giống hệt từng byte; mặc định TẮT) || v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) || v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
+| v23.6.27 | **Fix logo YouTube không bao giờ hiện** (3 key logo bị ghim trong FIXED_PRODUCTION_SETTINGS nên bị ghi đè; đã bỏ ghim — logo áp cho cả SmartTraffic và Adsconex) |
+| v23.6.26 | **Fix SmartTraffic HTTP 500** (lỗi tạm thời phía server; thử lại chính payload đó với giãn cách 20/40/60/80s thay vì gửi 2 lần cách 0,5s) || v23.6.25 | **Fix caption khi chọn ngôn ngữ khác tiếng Anh** (bộ kiểm tra chỉ nhận đại từ tiếng Anh nên loại oan caption tiếng Việt; thêm markers + độ dài + câu nhắc viết lại cho đủ 16 ngôn ngữ) || v23.6.24 | **Ngôn ngữ: bỏ hẳn câu ghim tiếng Anh trong prompt** (tích ngôn ngữ = truyện chỉ theo đúng 1 ngôn ngữ, mặc kệ video gốc; thêm CTA dịch theo ngôn ngữ) || v23.6.23 | **Chọn ngôn ngữ cho truyện** (nút tích + 16 ngôn ngữ ở tab SmartTraffic; áp cho mọi truyện + mọi chapter; không tích = tiếng Anh như cũ) || v23.6.22 | **Thêm logo YouTube trên ảnh bìa website** (port nguyên từ Phong_ADung, giống hệt từng byte; mặc định TẮT) || v23.6.21 | **Vá treo Transcription**: ép HF offline + bỏ OMP/OPENBLAS_NUM_THREADS + tránh PyAV bằng WAV/numpy + tắt VAD; khoá ctranslate2==4.6.0 (145s -> ~20-37s) || v23.6.20 | **Fix 502 Adsconex**: chia theo SỐ CHƯƠNG (timeout origin ~12s) + tra series_id chính xác + đăng tiếp khi dở dang |
 | v23.6.16 | Port phần đăng bài Adsconex sang bản DHue (theo đúng file anh gửi, KHÔNG sửa logic riêng) |
 | v23.6.17 | **Fix TREO khi đăng bài do LỆCH ĐỒNG HỒ** (3 lớp: giờ máy, bỏ mark tương lai, chờ tối đa 25s) |
 | v23.6.19 | **Vá crash PATH** — `configure_ffmpeg()` chỉ thêm ffmpeg vào PATH 1 lần (trước: mỗi video thêm 1 lần → nổ `ValueError` ở ~lần 454) |
