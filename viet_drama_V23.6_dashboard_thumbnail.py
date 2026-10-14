@@ -364,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.34"
+APP_VERSION = "23.6.35"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -425,9 +425,9 @@ FIXED_PRODUCTION_SETTINGS = {
     "fast_whisper_beam_size": "1",
 
     # Story
-    # "language" KHONG nam o day: nguoi dung chon ngon ngu o tab SmartTraffic.
-    # Neu ghim o day, apply_fixed_production_settings() se ghi de lua chon cua
-    # nguoi dung va luon ep ve "English" ma khong bao gi.
+    # "language"/"language_enabled" KHONG nam o day: nguoi dung chon ngon ngu o
+    # tab SmartTraffic. Neu ghim o day, apply_fixed_production_settings() se GHI DE
+    # lua chon cua nguoi dung -> ngon ngu KHONG BAO GIO doi du da tich.
     "fast_story_mode": True,
     "min_story_chapters": "6",
     "max_story_chapters": "10",
@@ -524,7 +524,7 @@ DEFAULT_FILENAME_PHRASES_BY_LANGUAGE = {
     "German": "\n".join([
         "TEIL 2 & KOMPLETTES ENDE", "HIER DEN NÄCHSTEN TEIL ANSEHEN",
         "WAS PASSIERT ALS NÄCHSTES? HIER ANSEHEN", "HIER DIE GANZE GESCHICHTE ANSEHEN",
-        "SIEH, WIE ES ENDET", "HIER WEITERSCHAuen",
+        "SIEH, WIE ES ENDET", "HIER WEITERSCHAUEN",
     ]),
     "Italian": "\n".join([
         "PARTE 2 E FINALE COMPLETO", "GUARDA LA PROSSIMA PARTE QUI",
@@ -4316,7 +4316,7 @@ JSON SCHEMA:
     }}
   ]
 }}
-""".strip()
+""".strip() + language_instruction(effective_language(self.cfg))
         obj = self._writer_json_call(
             f"Writer chapters {nums[0]}-{nums[-1]}",
             prompt,
@@ -4361,7 +4361,7 @@ REQUIREMENTS:
   names, do not contradict the script, and do not change the genre / era / outcome.
 - Return STRICT JSON only:
 {{"chapter": {{"number": {n}, "title": "...", "start_second": {safe_float(source.get('start_second'), 0.0)}, "end_second": {safe_float(source.get('end_second'), 0.0)}, "body": "..."}}}}
-""".strip()
+""".strip() + language_instruction(effective_language(self.cfg))
         obj = self._writer_json_call(
             f"Writer emergency Chapter {n}",
             prompt,
@@ -4381,8 +4381,9 @@ REQUIREMENTS:
         return ch
 
     def _story_metadata(self, analysis: dict, chapter_titles: List[str]) -> dict:
+        lang_name = language_prompt_name(effective_language(self.cfg))
         prompt = f"""
-Create metadata for an English serialized drama article.
+Create metadata for a serialized drama article written in {lang_name}.
 
 SOURCE ANALYSIS:
 {json.dumps({
@@ -5066,16 +5067,9 @@ Return STRICT JSON only:
             lang_key = effective_language(self.cfg)
             markers = FIRST_PERSON_MARKERS.get(lang_key, FIRST_PERSON_MARKERS["English"])
             marker_re = re.compile("|".join(re.escape(m) for m in markers), flags=re.I)
-            opening = caption.split("\n\n", 1)[0]
             hits = marker_re.findall(caption)
             # Ngon ngu pro-drop: nhan them dong tu ngoi thu nhat (bo dau de so sanh).
             verbs = FIRST_PERSON_VERBS.get(lang_key) or []
-            if verbs:
-                plain = "".join(ch for ch in caption.lower()
-                                if ch.isalnum() or ch.isspace())
-                verb_hit = any(re.search(r"\b" + re.escape(v) + r"\b", plain) for v in verbs)
-            else:
-                verb_hit = False
             # Tieng Nhat/Han/Thai khong dan cach bang dau cach -> dem ky tu thay vi "tu".
             if lang_key in NO_SPACE_LANGUAGES:
                 length_ok = 200 <= len(caption) <= 4000
@@ -7370,6 +7364,43 @@ class App(tk.Tk):
         ttk.Label(source, text="Chọn folder cha: tự quét mọi folder con; mỗi video đăng một bài rồi đổi tên theo ID. Folder bắt buộc Auto publish.",
                   foreground="#555").grid(row=4, column=0, columnspan=5, sticky="w", pady=(2, 0))
 
+        # ------------------------------------------------------------
+        # NGON NGU TRUYEN (mac dinh TAT -> giu nguyen hanh vi cu: tieng Anh)
+        # Dat ngay tai muc 1 "Dau vao": ap cho MOI net dang bai duoc chon.
+        # ------------------------------------------------------------
+        lang_box = ttk.LabelFrame(source, text="Ngôn ngữ truyện (áp cho mọi web/net đã chọn)")
+        lang_box.grid(row=5, column=0, columnspan=5, sticky="ew", pady=(8, 2))
+        lang_box.columnconfigure(1, weight=1)
+
+        ttk.Checkbutton(
+            lang_box,
+            text=("Viết truyện + caption + tên file bằng ngôn ngữ chọn bên dưới "
+                  "(mặc định TẮT = tiếng Anh như cũ)"),
+            variable=self.vars["language_enabled"],
+            command=self._refresh_language_state
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(2, 4))
+
+        ttk.Label(lang_box, text="Ngôn ngữ", width=26).grid(row=1, column=0, sticky="w", pady=3)
+        self.language_combo = ttk.Combobox(
+            lang_box, textvariable=self.vars["language"],
+            values=LANGUAGE_KEYS, state="readonly", width=30
+        )
+        self.language_combo.grid(row=1, column=1, sticky="w", padx=(6, 8), pady=3)
+        self.language_hint = ttk.Label(lang_box, text="", foreground="#0a7", width=24)
+        self.language_hint.grid(row=1, column=2, sticky="w", pady=3)
+
+        self.language_note = ttk.Label(
+            lang_box,
+            text="",
+            foreground="#555", justify="left", wraplength=950
+        )
+        self.language_note.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 2))
+        # O 'Cau chien trong ten file' nam o tab khac; theo doi ca 2 bien de cap nhat
+        # ngay khi nguoi dung doi lua chon (khong phai bam Save moi thay).
+        self.vars["language"].trace_add("write", lambda *a: self._refresh_language_state())
+        self.vars["language_enabled"].trace_add("write", lambda *a: self._refresh_language_state())
+        self._refresh_language_state()
+
         # ---------------- TABS ----------------
         nb = ttk.Notebook(top, height=190)
         nb.pack(fill="x", pady=3)
@@ -7520,35 +7551,6 @@ class App(tk.Tk):
         ttk.Combobox(st, textvariable=self.vars["pagebreak_mode"],
                      values=("<!--nextpage-->", "{{nextpage}}"), state="readonly", width=24).grid(
                          row=5, column=1, sticky="w", pady=4)
-
-        # ------------------------------------------------------------
-        # NGON NGU: ap cho MOI cau chuyen va MOI chapter (khong chi rieng bai nay)
-        # ------------------------------------------------------------
-        self.language_enable_check = ttk.Checkbutton(
-            st,
-            text=("Áp ngôn ngữ đã chọn cho mọi truyện (KHÔNG tích = mặc định tiếng Anh "
-                  "như trước giờ)"),
-            variable=self.vars["language_enabled"],
-            command=self._refresh_language_state,
-        )
-        self.language_enable_check.grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 2))
-
-        ttk.Label(st, text="Ngôn ngữ truyện", width=22).grid(row=7, column=0, sticky="w", pady=4)
-        self.language_combo = ttk.Combobox(
-            st, textvariable=self.vars["language"], values=LANGUAGE_KEYS,
-            state="readonly", width=24
-        )
-        self.language_combo.grid(row=7, column=1, sticky="w", pady=4)
-        # Hien nhan day du (co ca ten ban dia) ben canh ma ngon ngu.
-        self.language_hint = ttk.Label(st, text="", foreground="#555")
-        self.language_hint.grid(row=7, column=2, sticky="w", padx=(8, 0), pady=4)
-
-        self.vars["language"].trace_add("write", lambda *a: self._refresh_language_state())
-        self.vars["language_enabled"].trace_add("write", lambda *a: self._refresh_language_state())
-
-        self.language_note = ttk.Label(st, text="", foreground="#555", wraplength=950)
-        self.language_note.grid(row=8, column=0, columnspan=3, sticky="w", pady=(2, 4))
-        self._refresh_language_state()
 
         ttk.Label(
             st,
@@ -8028,7 +8030,11 @@ class App(tk.Tk):
             messagebox.showerror(APP_NAME, f"Không tạo được ảnh xem trước: {exc}")
 
     def _refresh_language_state(self):
-        """Bat/tat o chon ngon ngu theo nut tich; ghi ro dang ap ngon ngu nao."""
+        """Bật/tắt ô chọn ngôn ngữ theo nút tích; cập nhật ô 'Câu chèn trong tên file'.
+
+        Ô câu chèn tên file CHỈ tự đổi khi nó vẫn đang chứa bản mặc định — nếu
+        người dùng đã tự nhập danh sách riêng thì giữ nguyên (tôn trọng ý người dùng).
+        """
         try:
             enabled = bool(self.vars["language_enabled"].get())
         except Exception:
@@ -8039,30 +8045,31 @@ class App(tk.Tk):
             pass
         key = str(self.vars["language"].get() or "English").strip() or "English"
         try:
-            self.language_hint.configure(text=language_label(key) if enabled else "(đang tắt)")
+            self.language_hint.configure(
+                text=("Đang áp: " + language_label(key)) if enabled else "(đang tắt)")
         except Exception:
             pass
         try:
             if enabled:
                 self.language_note.configure(
-                    text=("Đang áp cho TOÀN BỘ câu chuyện: tiêu đề, meta, TÊN từng chapter, "
-                          f"NỘI DUNG từng chapter và caption Facebook — viết bằng {language_label(key)}. "
-                          "Không trộn ngôn ngữ khác, kể cả khi video/kịch bản gốc là tiếng Anh."))
+                    text=(f"Đang BẬT: Writer viết toàn bộ truyện, tiêu đề chapter, metadata, caption "
+                          f"Facebook và tên file video bằng {language_label(key)} — kể cả khi kịch bản/hook "
+                          "nguồn là tiếng Anh thì vẫn dịch và viết lại. Tên riêng (tên nhân vật, địa danh) "
+                          "giữ nguyên.\n"
+                          "Áp cho MỌI net đang chọn ở 'Net đăng bài' (SmartTraffic / Adsconex / Slink) — "
+                          "đổi net không phải bật lại.\n"
+                          "Đổi ngôn ngữ KHÔNG tự đổi danh sách 'Câu chèn trong tên file' anh đã tự nhập — "
+                          "chỉ thay khi ô đó còn là bản mặc định."))
             else:
                 self.language_note.configure(
-                    text="Đang TẮT: truyện viết mặc định bằng tiếng Anh như trước giờ.")
+                    text=("Đang TẮT: mọi thứ chạy y như trước (tiếng Anh), KHÔNG đổi gì — "
+                          "kể cả khi đổi net đăng bài."))
         except Exception:
             pass
-
-        # O 'Cau chien trong ten file' cung phai theo ngon ngu (ten file hien ra
-        # cho nguoi xem). Chi thay khi o do VAN LA MAC DINH de khong lam mat ban
-        # nguoi dung tu nhap.
         try:
             editor = getattr(self, "filename_phrase_editor", None)
             if editor is not None:
                 current = editor.get("1.0", "end-1c").strip()
-                # Chi tu doi khi o dang chua ban mac dinh (cua bat ky ngon ngu nao).
-                # Neu nguoi dung da tu nhap thi GIU NGUYEN.
                 if _is_default_phrase_list(current):
                     wanted = filename_phrases_for_language(
                         {"language": key, "language_enabled": enabled}).strip()

@@ -1,5 +1,5 @@
 {
-  "version": "23.6.34",
-  "notes": "FIX LOI GUI: thieu dong elif adsconex_categories trong _poll_queue khien bam Lay danh muc Adsconex bao 'too many values to unpack'",
-  "date": "2026-10-14"
+  "version": "23.6.35",
+  "notes": "PHAN NGON NGU GIONG ADUNG: (1) them language_instruction khi viet chapter batch/emergency + metadata theo ngon ngu; (2) chuyen khoi chon ngon ngu ra muc 1 Dau vao ap cho moi net; (3) _refresh_language_state giong ADung; (4) sua typo WEITERSCHAUEN",
+  "date": "2026-10-15"
 }
