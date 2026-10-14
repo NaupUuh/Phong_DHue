@@ -1,5 +1,5 @@
 {
-  "version": "23.6.32",
-  "notes": "FIX CAU CHEN TEN FILE BI LECH NGON NGU. Trieu chung: chon tieng Tay Ban Nha nhung ten file van co cau chen tieng Viet ('XEM TRON BO PHIM TAI AY'). Nguyen nhan: khi doi ngon ngu, tool TU DIEN danh sach cau chien vao o 'Cau chien trong ten file', roi lan Luu Settings sau do ghi danh sach do vao config nhu the nguoi dung tu nhap. Lan chay sau, filename_phrases_for_language() thay danh sach khac ban mac dinh tieng Anh nen tuong la ban rieng cua nguoi dung va GIU NGUYEN -> ket qua la cau chien tieng Viet cu di theo mai. Da sua: them _is_default_phrase_list() nhan dien ban mac dinh cua BAT KY ngon ngu nao (16 ban) -> khi o dang chua ban mac dinh (ke ca ban da bi luu tu lan doi ngon ngu truoc) thi luon tra ve ban dung ngon ngu DANG CHON. Ban nguoi dung TU NHAP van duoc giu nguyen. Da test: config that dang luu ban tieng Viet -> doi sang Spanish tra ve 'MIRA LA HISTORIA COMPLETA AQUI'; 16/16 ngon ngu tra dung ban cua minh; ban tu nhap duoc giu nguyen; GUI tu doi o khi doi ngon ngu.",
-  "date": "2026-10-13"
+  "version": "23.6.33",
+  "notes": "THEM NET SLINK (fableon) + NUT PLAY TRANG. (1) Net dang bai thu 3 'Slink': dang mode=chapter qua REST API fableon, da ngon ngu en/vi/zh/ko, luu payload bai loi 5xx de dang lai, chay o CA 3 cho (nut Dang lai bai loi + cuoi batch + combobox Net dang bai) - SmartTraffic/Adsconex giu nguyen 100%. (2) Kieu logo thu 3 'white': nut play trang kieu overlay Facebook (asset PNG nhu ADung), mac dinh VAN TAT. (3) Day luon 13 ban va 23.6.20->32 truoc do chua tung len GitHub (may khac bam Cap nhat se bi tut ve 23.6.19). Phan doc video/Whisper/Vision cua may Xeon KHONG doi mot dong nao.",
+  "date": "2026-10-14"
 }

@@ -364,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.32"
+APP_VERSION = "23.6.33"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -670,6 +670,14 @@ DEFAULT_CONFIG = {
     "adsconex_rate_limit_per_min": "6",
     "adsconex_rate_shared_path": "",
     "adsconex_rate_fallback_delay": "15",
+    "slink_api_key": "",
+    "slink_base_url": "https://fableon.treeiq.biz/api",
+    "slink_site_host": "fableon.treeiq.biz",
+    "slink_site_id": "724",
+    "slink_category": "266",
+    "slink_status": "published",
+    "slink_retry_count": "3",
+    "slink_retry_delay": "30",
     # Origin cua site co TIMEOUT XU LY ~12s: POST nao server can >12s de tao xong
     # chuong -> Cloudflare tra 502 origin_bad_gateway. Da do that: <=4 chuong/request
     # luon 201; 5-10 chuong -> 502 hang loat (token cua nguoi dung khac);
@@ -1040,7 +1048,8 @@ def find_unpublished_videos(folder: Path) -> List[Path]:
 
 def find_saved_publications(output_root: Path, videos: List[Path], net_provider: str = "SmartTraffic",
                             site_host: str = "drama.viralstory.biz",
-                            adsconex_site_host: str = "dramanest.gigglelo.com") -> dict:
+                            adsconex_site_host: str = "dramanest.gigglelo.com",
+                            slink_site_host: str = "fableon.treeiq.biz") -> dict:
     """Find existing article IDs for source videos before any new publish POST."""
     from collections import Counter
     name_counts = Counter(v.name.casefold() for v in videos)
@@ -1052,9 +1061,13 @@ def find_saved_publications(output_root: Path, videos: List[Path], net_provider:
             continue
         try:
             result = json.loads(result_path.read_text(encoding="utf-8"))
-            use_ads = str(net_provider or "").strip().lower().startswith("ads")
-            existing_link = (published_adsconex_link(result, adsconex_site_host) if use_ads
-                             else published_article_link(result, site_host))
+            _p = str(net_provider or "").strip().lower()
+            if _p.startswith("ads"):
+                existing_link = published_adsconex_link(result, adsconex_site_host)
+            elif _p.startswith("slink"):
+                existing_link = published_slink_link(result, slink_site_host)
+            else:
+                existing_link = published_article_link(result, site_host)
             if not existing_link:
                 continue
             source_path = work_dir / "source_video.json"
@@ -1530,6 +1543,124 @@ def _adsconex_has_published(work_dir) -> bool:
         return False
 
 
+
+# ---------------------------
+# Slink (fableon): luu payload bai loi de dang lai, khong ton Vision/Writer
+# ---------------------------
+SLINK_PENDING_FILE = "publish_pending_slink.json"
+
+
+def slink_pending_path(work_dir):
+    return Path(work_dir) / SLINK_PENDING_FILE
+
+
+def slink_write_pending(work_dir, payload: dict, status, detail: str = "") -> None:
+    """Ghi payload bai Slink dang loi (network/502/503/504/429) de lan sau dang lai.
+
+    fableon tao bai NGAY khi nhan POST /api/posts/chapter, nen chi luu khi CHAC CHAN
+    chua tao duoc bai (loi mang hoac 5xx/429 tu Cloudflare/origin). Loi 401/403/422
+    tra ve ngay tu Laravel -> khong tao bai -> van luu de dang lai an toan.
+    """
+    if not work_dir or not isinstance(payload, dict) or not payload.get("chapters"):
+        return
+    try:
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        _safe_write_text(
+            slink_pending_path(work_dir),
+            json.dumps({
+                "http_status": status,
+                "detail": str(detail)[:800],
+                "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "machine": platform.node(),
+                "payload": payload,
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def slink_clear_pending(work_dir) -> None:
+    """Xoa dau 'con bai loi' khi da dang thanh cong."""
+    if not work_dir:
+        return
+    try:
+        slink_pending_path(work_dir).unlink()
+    except OSError:
+        pass
+    except Exception:
+        pass
+
+
+def slink_existing_slugs(cfg) -> set:
+    """Slug cua MOI bai da co tren site fableon (GET /posts).
+
+    Dung de TRANH dang trung: neu bai da ton tai (502 la loi gia) thi bo qua.
+    Loi goi API -> tra set rong (khong chan dang lai).
+    """
+    try:
+        base = str((cfg or {}).get("slink_base_url") or "https://fableon.treeiq.biz/api").strip().rstrip("/")
+        token = str((cfg or {}).get("slink_api_key") or "").strip()
+        if not token:
+            return set()
+        host = urlsplit(base).netloc or "fableon.treeiq.biz"
+        headers = {
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"),
+            "Referer": f"https://{host}/admin/dashboard",
+            "Origin": f"https://{host}",
+        }
+        r = requests.get(f"{base}/posts", headers=headers, timeout=60)
+        if r.status_code != 200:
+            return set()
+        data = r.json()
+        rows = data.get("data") if isinstance(data, dict) else data
+        if not isinstance(rows, list):
+            return set()
+        return {str((p or {}).get("slug") or "").strip().lower()
+                for p in rows if isinstance(p, dict)}
+    except Exception:
+        return set()
+
+
+def find_pending_slink(output_root, cfg=None) -> list:
+    """Liet ke [(work_dir, payload)] cua cac bai Slink tung loi va CHUA dang duoc."""
+    items = []
+    try:
+        root = Path(output_root)
+    except Exception:
+        return items
+    if not root.is_dir():
+        return items
+    existing = slink_existing_slugs(cfg) if cfg else set()
+    for work_dir in sorted(root.glob("_story_output_*"), key=lambda p: p.name):
+        if _adsconex_has_published(work_dir):
+            continue
+        path = slink_pending_path(work_dir)
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8") or "{}")
+        except Exception:
+            continue
+        payload = data.get("payload") if isinstance(data, dict) else None
+        if not (isinstance(payload, dict) and payload.get("chapters")):
+            continue
+        slug = str(payload.get("slug") or "").strip().lower()
+        if slug and slug in existing:
+            # Bai DA co tren site (502 la loi gia) -> KHONG dang lai de tranh trung.
+            try:
+                _safe_write_text(work_dir / "republish_skipped_already_live.txt",
+                                 f"Bai slug '{slug}' da co tren site fableon. Bo qua dang lai.\n",
+                                 encoding="utf-8")
+            except Exception:
+                pass
+            continue
+        items.append((work_dir, payload))
+    return items
 def adsconex_split_chunks(content: str, max_chars: int = 36000,
                           max_chapters: int = 3) -> list:
     """Chia content chapter-mode thanh nhieu phan.
@@ -1990,12 +2121,107 @@ def build_adsconex_chapter_content(story: dict) -> str:
         parts.append(paragraphize(chapter_body_only(ch.get("body", ""), n)))
     return "\n".join(parts)
 
+def published_slink_link(result: dict, site_host: str) -> str:
+    """Link bài Slink/fableon dạng /<slug>. Lấy từ response, không đoán."""
+    if not isinstance(result, dict):
+        return ""
+    host = urlsplit("https://" + re.sub(r"^https?://", "", str(site_host).strip().strip("/"))).netloc
+    if not host:
+        return ""
+    candidates = [result]
+    for obj in list(candidates):
+        for key in ("data", "post", "result", "posts"):
+            nested = obj.get(key) if isinstance(obj, dict) else None
+            if isinstance(nested, dict) and nested not in candidates:
+                candidates.append(nested)
+            elif isinstance(nested, list):
+                for item in nested:
+                    if isinstance(item, dict) and item not in candidates:
+                        candidates.append(item)
+    for obj in candidates:
+        url = str(obj.get("url") or obj.get("link") or obj.get("permalink") or "").strip()
+        if url.startswith("http"):
+            return url
+        if url.startswith("/"):
+            return f"https://{host}{url}"
+    for obj in candidates:
+        slug = str(obj.get("slug") or "").strip()
+        if slug:
+            return f"https://{host}/{slug}"
+    return ""
+
+
+def slink_localized(value, lang: str):
+    """fableon nhận title/content dạng chuỗi hoặc dict đa ngôn ngữ {en,vi,zh,ko}."""
+    if isinstance(value, dict):
+        text = str(value.get(lang) or "").strip()
+        if not text:
+            for key in ("en", "vi", "zh", "ko"):
+                text = str(value.get(key) or "").strip()
+                if text:
+                    break
+        return text
+    return str(value or "")
+
+
+# fableon CHI co 4 slot ngon ngu cho title/content/seo_*. Ngon ngu khac (Nhat,
+# Han, Tay Ban Nha...) khong co slot rieng -> ghi vao 'en' nhu truoc gio.
+SLINK_LOCALES = ("en", "vi", "zh", "ko")
+
+
+def slink_localized_value(text, locale: str) -> dict:
+    """Boc text thanh dict da ngon ngu {en,vi,zh,ko} de gui len fableon.
+
+    fableon luu CHUOI THUONG vao key 'en' bat ke noi dung viet bang ngon ngu nao,
+    nen bai tieng Viet truoc day bi gan nhan 'en' (da kiem chung tren bai that:
+    title = {"en": "Chiếc Xe Đen Trên Con Đường Đất"}). Gui dict -> server ghi
+    dung key locale.
+
+    LUON kem 'en' cung noi dung lam fallback: theme hien tai render <title> va
+    og:title tu key 'en', neu chi gui {vi: ...} thi cac the do se RONG.
+    """
+    text = str(text or "")
+    out = {"en": text}
+    key = str(locale or "").strip().lower()
+    if key and key != "en":
+        out[key] = text
+    return out
+
+
+def build_slink_chapters(story: dict, pagebreak_marker: str = "{{nextpage}}") -> list:
+    """Dựng mảng chapters cho POST /api/posts/chapter của fableon.
+
+    Mỗi phần tử: {"title": ..., "content": "<p>...</p>"} — content là HTML,
+    phân trang trong 1 chương bằng marker {{nextpage}} (Tiptap/fableon hiểu).
+    """
+    marker = pagebreak_marker if pagebreak_marker in ("{{nextpage}}", "<!--nextpage-->") else "{{nextpage}}"
+    chapters = []
+    for idx, ch in enumerate(story.get("chapters", []) or [], 1):
+        n = safe_int(ch.get("number"), idx)
+        raw_title = str(ch.get("title") or "").strip()
+        raw_title = re.sub(rf"^chapter\s*{n}\s*[-:–—]*\s*", "", raw_title, flags=re.I).strip()
+        if not raw_title:
+            raw_title = "The Story Takes a Dangerous Turn"
+        raw_body = ch.get("body")
+        if raw_body is None:
+            raw_body = ch.get("content") or ""
+        # Cat truoc khi paragraphize: paragraphize() escape HTML, nen marker
+        # <!--nextpage--> se bi doi thanh &lt;!--nextpage--&gt; va fableon khong
+        # con hieu la ngat trang. Tach -> paragraphize tung phan -> noi lai.
+        parts = re.split(r"<!--\s*nextpage\s*-->", chapter_body_only(raw_body, n), flags=re.I)
+        blocks = [paragraphize(p).strip() for p in parts]
+        body = f"\n\n{marker}\n\n".join(b for b in blocks if b)
+        chapters.append({"title": html_escape(raw_title), "content": body})
+    return chapters
+
 def active_publish_link(result: dict, cfg: dict) -> str:
-    """Link bai theo net dang chon: Adsconex (/blog/<slug>) hoac SmartTraffic (/article/<id>)."""
+    """Link bai theo net dang chon: Adsconex (/blog/<slug>), Slink (/<slug>) hoac SmartTraffic (/article/<id>)."""
     cfg = cfg or {}
     provider = str(cfg.get("net_provider") or "SmartTraffic").strip().lower()
     if provider.startswith("ads"):
         return published_adsconex_link(result, cfg.get("adsconex_site_host", ""))
+    if provider.startswith("slink"):
+        return published_slink_link(result, cfg.get("slink_site_host", ""))
     return published_article_link(result, cfg.get("site_host", ""))
 
 def safe_video_filename(post_text: str, article_url: str, suffix: str, max_length: int = 219,
@@ -2916,22 +3142,226 @@ def _youtube_badge_font(size: int):
         return ImageFont.load_default()
 
 
+# ---------------------------------------------------------------------------
+# Nut play TRANG (kieu "white") - asset PNG trong suot THAT, nhung san duoi
+# dang base64 de tool van la 1 file .py duy nhat (khong can thu muc assets).
+# PNG 221x221: dia xam dac #B0B0B0 + tam giac trang NHON, vien cung,
+# khong shadow.  D = 100% khung; tam giac th = 0.450D, tw = 0.400D,
+# lech phai 0.048D.
+# ---------------------------------------------------------------------------
+_WHITE_PLAY_B64 = (
+    "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"
+    "kP82/xsBWgHcgOaAqUDHwJWBfUGkoAVB1UEPgs2CRcE9IXBIYMj2kLvzDecL53eFgtCA0O2h98KMw5aFfR+OCQ8Lrwl/GGET"
+    "URDRv4C6YMmClgWvIr0iyyLvRJlESaJ6oxWjE6Kbo1/HeMeUx0hjrWJXxl6K04gTxHXHY+Oj45vipxf6LNy5cDzBPqE44foi"
+    "40V5iy4s1licvvj4EsUlnCVHEtGJMYktie85oZwGzvTSgKW1S6e4bO4u7hOeB28Hb5Lvyi/nTyS5JpUnPUp2Td6ePJninlKR"
+    "8lTAFlQLnqf6p9alvk4LTduf9ik9Jr09A5eRmHFUSBGmCfsytTPzMoezzLOKs6TLnJftXDYlChI1ZUPZi7K7xTTZz9SAxESy"
+    "XjKa45ZTk/MmNzr3SJ5ynjBvYLnZ8k3LJ/J9879egVrBXdFboFuwtmB0pefK+lXQqqWrelfrry5aPb7Gb82BtYS1aWt/KLQu"
+    "LC98uS5mXU+RVtGaorH1futbixWKRcU3NrhsqNuI2ijYOLhp7qaqTR9LeCUXS61LK0rfb+ZuvviVzVeVX33akrRlsMyhbM9W"
+    "zFbh1uvb3LcdKFcuzy8f2x6yvXMHY0fJjpc7l+y8UGFXUbeLsEuyS1oZXNldZVC1tep9dUr1SI1XTXutZu2m2te7ebuv7PHY"
+    "01anVVda926vYO/Ner/6zgajhop9mH05+x42Rjf2f836urlJo6m06cN+4X7pgYgDfc2Ozc0tmi1lrXCrpHXyYMLBy994f9Pd"
+    "xmyrb6e3lx4ChySHHn+b+O31w0GHe4+wjrR9Z/hdbQe1o6QT6lzeOdWV0iXtjusePhp4tLfHpafje8vv9x/TPVZzXOV42QnC"
+    "iaITn07mn5w+lXXq6enk02O9S3rvnIk9c60vvG/wbNDZ8+d8z53p9+w/ed71/LELzheOXmRd7LrkcKlzwH6g4wf7HzoGHQY7"
+    "hxyHui87Xe4Znjd84or7ldNXva+euxZw7dLI/JHh61HXb95IuCG9ybv56Fb6ree3c27P3FlzF3235J7SvYr7mvcbfjT9sV3q"
+    "ID0+6j068GDBgztj3LEnP2X/9H686CH5YcWEzkTzI9tHxyZ9Jy8/Xvh4/EnWk5mnxT8r/1z7zOTZd794/DIwFTs1/lz0/NOv"
+    "m1+ov9j/0u5l73TY9P1XGa9mXpe8UX9z4C3rbf+7mHcTM7nvse8rP5h+6PkY9PHup4xPn34D94Tz+6TMXDkAACHiSURBVHja"
+    "7Z35d1NHmvc/VXfR5hXFOIaEBLIAcXvc9NDLzDkz5z3n/cPf98x0Z9IZdzxuN6GzNBAwGGOMsGXJ0l2q5odburrypl26sl0+"
+    "JAcsW7r1reepZ/0+QjP569F0LRvYSoaWktGXlo3nEub/VmAHtm+pTM0OskefB5P/1GIyoXsq92cr00fZetb1AjuUegNAoxNg"
+    "RUsBAo0ABAIN6IcgQ8fLeJmjfDV7dK92Bd2Q1z/s/dnyrOf6dmCr9ejfQgQCCWhCQiwDUQQlCTAj2CzzuzQaiQDC31l+rpav"
+    "5ioz+5MkjRMC3XqxNF/LhrZaj7a8AYlAG1lrAKZa4MK8tgEiKKSBrPH9EIGNxoffuXXXmyrPHCyXr6Drc/2Q3b1+lPfcwFFr"
+    "0mw8aFQMnRWDJxAI8x0d33MiBk7EUIKKf0YDEhsI0cjoa8VSmdp0eX7vjrqCruv1uFCeOpw+ygcbyXsrTEiTQCLwYnWpUYAd"
+    "A0cshU0YBU0sop/X5ie1+Z0BFpb5ffZqoZqrzJfu1q6g62j96JaK+7OeqzYiSRAGiqbUNW4uhTay1oQjMCBxzMJslUViNaux"
+    "DIAC0EhzBAQSC4nAWna9XGWulDZjJmXQfVd8V6xl1UZ0iwUE2OPYFAOjBmwCFDbuSq46V/p16Qq6U2TtzYf7c7Wc842KpUKh"
+    "xw6dRCOwAB/xMHs0fbj4Kh12aCqgW1vYW/DcYF2auyhpeIxlUxJK1iEw96NCYiMQq4Xq0tb41efYoft2sVSsFvhWGivQM8Z7"
+    "w8DXY4bOByxsBCHKWKMC/cD1PtxeLV1S6J7KN4vvivWMWJMowhgkaQwS3bKN44JOJT5R5FK4CAIk2WXXK1R+v33poPv65rui"
+    "v6EIsY2ajE52c9MYk7psXQ4hoYm9WEgUKrZABdbq9OFcaTzSNxbo/rz0ZjFwxLcgYk9NmHNttTjYST9sPCtAxp5eiEKAgdBH"
+    "YCOxV/LVa3sr+xceur8s7C4cFeS3kgCw8VFILDSBCUhp461FSlOOXFnqE6qz4elhLE4FWAgUioAMDqzmqh9uf1W5sND9bfpd"
+    "sTzjbzRCU/qY8T8us6S/FbkwGdy72dr83ujgGxl0T+XLj97PeRtWDM9pKRoxcdBpYw8rwCF/d670z7sXCrrvim8Xqo8jdcOJ"
+    "0FR/W3e6dTg6mYvMLB+wcWF16vDDV6OIeo4Aup/tJ59XC/aaiu1HEvm0SYfuuKq3EFgr86V/eTnx0P3XzffzwWaAxkIRmFTo"
+    "IBXWuKHTxlWILOQ6WRz0Azu4/fR+ZYKh+/93yjN6XaIIjGsbnnB6J32JxL0dOQ02GQL0wxtbv9uZSOh+yL64VZ51vq2Z+yAE"
+    "HOOnicR51RcKugxH+LjYBPBwZv/TJ8NK1w4Nuv9eLM17jz1CXCwCFBJNiDwmc7JP2RNtFOjwgVMtCjMgi6AGZBAoMisfvRiO"
+    "uz4k6L6+WSpWNjQZHAKCuIRHD/wuGo3q1Wfeoid90ahYInpWhxBr9YPdYUQ6hwDdT+6LW4dTej00DrcyIdzhONxNd0OPSV3q"
+    "Y3+P4pzSZOA9XOyVQvXWs9sq5dB9V9xZqmzKuL5Dx3UhvW2wGLPU6R6OUojGMYWG2jgM2fsfvxisxTlg6L5Z2l301jUCaaJ9"
+    "Oi776S3QJWHM0RLd9VELwEAHFnUsMoC9/NGLX5VTCt0fb71Z1N9Kk+VqyF2zPjJSJoOFTozgltNdfuIwUQQV/QmRuNgrH+z+"
+    "did10D2Rzz/dnz9ac01MXcd1VknjWUyg1HWnNrVJW0VPb5nCqACNjcBend/715epgu4n94d7/oZDFacFrCZ0vVqXkwWdiDOO"
+    "wqRnFRoL2+T3XMRqtvZ/f0wNdH+d3b5Zf+QhyVAx1mRrqrR3+MYNXTcqUxglqeN6TmlUerM43sZ+MH3wf56kArq/Z3+85627"
+    "xiTWXUfez6/7kmPPxg12hbjI1anD/sHrG7rN2Vc3q4+kqZiSPZzp86ETqVCYg3MeAixsnJXC4b8/Gyt0jws/faHXbUK8uGaj"
+    "t4LVSV2q66f1sXBQD2dL/Ume7K/f7cXHat1CG3O4/yKgSQax0w230PiEawczX98ck9Q9Lrz4+Oixb9xvYeoU5ZXUdZBVDwmR"
+    "OA+Ku727CrL3WpNfPqk8TvaNNlqkRhO1mFypi1rNLCBcP5j9062RQ/fk8/ojG3BMbUbY1uC4yLLX+YpqBRQWNprqo7cL3xVH"
+    "Ct0fb+0uSOOxKBM7sQHv6q5rszwsXBNvUhxhrZWKf50d2V33n59ufVz4D02dTA+6XrQExOSEQ6H6zF1oIL/8yS/dZxVkL/XL"
+    "pbnCf4SEuPg9KcbkFxegvEHE/xU9qD3J0aPnn/zDHjp0G/Nbt8L1RpzOuoIuAZvoKboCgtqj558OGbqf3O0luaY5wsHC7wG6"
+    "i7dEIpUserStBZV8t15el9A9u7P/KIxPmU4UxQ4390yqS9c1zS6KbldknwcEG6XixvzQoPvTrVrWwsPCoYJHpoePqhO1JBfL"
+    "k9M9hqMxXQv+xs7i37NDge6vs7sLYj1rymb0hbAPh1Gb1i10CsuUgNQev/h0KND9cps1Hx8bD48pMng9fNzmZX7xnPBensc1"
+    "AY0AgaBS+OOtgUP3n582CmA1Lg4+IVaHXp0wcU55jJ/rIkqeNDxK0iScO0l6RVVjGoW9VrrWaXRFdtpCvFcU6zYBV2sYFWeN"
+    "Qv4Qb/310gCh+9neWQzW9AWzDNPm1msUCoda7v99PjjovgzWHfwx0T5dLggtxLflqW8XBwLdXxYOZp0EeeHVGk7hUmQReCj8"
+    "9VLxiewbuqfy7YL9tTY1FeHVPg/ZLvVRaPxH//iyb+ie3ak9slEEhuTlag1e5pqUqw0eMkWl8LfpvqD76+z7+cAoysh5vFrD"
+    "iMEIk0BS2NhINM7aq5t9Qbd90/rWiilDdUeGro79G9mFf9N6BhvBIUHOVBQ7cW5Mm1SJbvEq05SJEKf6szJRFX5WT6w0dmaI"
+    "T2D/182eofuf+VpOdcG50Hv0vLX9Q8T9CpoyIZKQuvEpbdMGFdV3WBMX0G49XuLU0JiMetI3D6fPy+KdC93rJdaSjF2jKFBo"
+    "0CmqBL29hcAig4vAS7A565YQwUWxgJWBLkQ9fnGrJ+j+vHQ4fTzeOIqt0S0HQcagqJiR0ooJtxUXLdsg424FjcXh1PeFrqF7"
+    "Kt8u6G/UsY3sjQam21qPJol21GjYOIcRC7OVuPGcic3u6TO0hCKyLVw0Hmxs3zw703fG2roVbjhdEsqIgTyaZSwtTYiFjSTP"
+    "HHkUFcrUqBsoiSGepACdaHM7N7qDJFAlQy37aPr0gRlnQncwo83kjU47SAdl3dl4KCQBITnmuc48WUMocMQ+u7zFM99vPMDk"
+    "UOiIY5b0ye+HcWdCHRux8e423UD3x1uBE7acENEGPDEwGK3YynRY5BNmEh/SZZoFXrPLASpu8NITxOzXjufFxsNC45HDB+pU"
+    "8uvFB3sd33XVfH0txE6YAWdp6NaKqKR3pXuCMLIhI/iu8xnzx06XJMcn3OMjisySpWra7DU1gtgyFam0N0Viu8UZJR6h6cF3"
+    "CIguLPXoYLZjM2VtoVqwDNfj6cV4w+sVsIwBEpLlYwqngi+Z4Qvus0iGa7jUOARmyVFL3IHiApBYgSagPPVDtkPoXi/pNSse"
+    "ZNR5RdSgiJsEFopp5s4JvFnM8Tm/4jo5suSRVKjhxsTDF6V8wkITbrz6qKO77tF0LWebRsdw5GV5Udu8RDNHpg3IGT6gQJFt"
+    "ysY9lwl+FnFBOoM0FtV8R1K3syi+0fGEqtE3eET5YouZDoLdgjxL3OM20+TIxMNcGpS+8kIozBCh/rzUFrrvC5UpxyjLsI0z"
+    "MIwSdBEz+Lkd/k6LaT7mV3xIxNki2lKyMVHZPI2Czd2FttDtz/nrAoGNwD/l0fUp0XEx4OyV6lqibea4zz/xEdPG0CEeLzP5"
+    "KlMQEjjrxTbQHeU86mgcBOrUQJM+Ve4GdcLDOKmjutp4QYYF7vElSxQSKZZJXyESCx/WSvPnQrdefD/fGKmpkKc0YR2XMT1g"
+    "g8VKsK90HzXNsMRdbnONAhlTpy3im49Txk+0DiIUqbQwI11UzbemgI5Btz+rvrVMIbUa86OIHtVLgU9Z4QY2kMPFo4ZFFmF4"
+    "ulqPoU55JbYyzd6acGOveA50R/lmSmW8D9TPe1tM8xkrfIINuGRR1AhMZ5I4wf4lUqxck62X5dkzoVtb8G2ZGMQ+ec0XzZ92"
+    "WeAL7vEhU2ZSkGXSKToBXuuEk3Smahtca5K6m+wEaoHucFqvNyZGDYbCpr+z1u/vyHKDL/mEAhlyWOYmTUYQdYu8idTyskQl"
+    "HcHmu+Kp0ZR/2LVss3CnQUAqJlLqmidziiyz7LDDoQntcgIunWr2CEmTl76WO1Xq3s97jy6KI5s8Ag5FPuMrPmHWDI0XLZPJ"
+    "ky0bOpXqUht6KkFg/2yfInWVQmiyBdLcCXpCzZTTVOd1ZnnHFhVq5ukakZtm8CyN0EUVsBE5lSZ4fHiN0gnoSsU8R4kzeLHk"
+    "T5JjiTles0UFm5C6sTctQ7E9WtNMd3FxNMZ6hAQc5U9A9/es51opOnViKPAV+JQP2eIFAQUER/hxhi8if0prB2FDkA6nT9x1"
+    "B7Pi6yBVUiaGFJ0ocIdVPjJMS9G849AQZfkpfTod11LX3ceFY9AdTltjtCcZ8dTjD7jHZ8zh4sRM1aP36zrjOBKtsZ+Nw6kW"
+    "hflE1rMyVS1YYsi/PcsN5njDG/bxE0HvcEzdCfpcguVk6KDhIBjoqoVgU5lRJhcfuIbqnCLLHG94xUHMDitHPA1ItJABtC8l"
+    "UXhui8I8ykcTMPSlkbuGz3eNO3zFLQqGqTJtMSN9ovwjlFEGQTakLoryiUvYU5phkS+5zRQO+VQG/VpjrOpxZGUahVnLRkGi"
+    "9DQ/ipH6fNPkmGeHXTw8QlNThmncEHHrosY6NrRCDERp6jZD3kRiTKM2KtMG+Mmtu415a5d12cwzRZEt9gw0ymQgtGFrbpRZ"
+    "jTfiqVDGULEbGQOL0PA3c2nb8V0WmOYtv1AyEx+DRJ3LaREQMYYBo5qgedcdZVUKg15iLO+Z4yar3GcOgcZpGeOmU0EOqfDt"
+    "p9JInZeJhnOmqdVQjDHaOU2eD3jOG0IzL6VRq2OZvzHGIt0Q/7GfwZMASopTym4u87KY5R7LXCNnspaWMeNaaWr0WOoyNV7G"
+    "SF1oNy2oK2aU5s23yAzv2GHPVKQm90eMccSFwHMbCtNNTgm/WslMQ4YZZtihbPJ74ZjNlEhh17Jgw+NC4GSoEWC3DYSJBP2v"
+    "uBQyajNDnmu8ZpcjA1xrE7RuKZQQfeTudMvvFmd2QkmUBTZ4brhmd+XVD6rwZ5JKJKaZZ5v3vDcUIJBB4LWQb/Urg53GMcOG"
+    "wqxluyllEJdoiMvxuupZdnlBGUXWzF61EwxKo+npi8AN7EjqMsTBlvMgPI2LSKRmlPsobr6oumyLbeqJeVjEFD397UdnF5Dx"
+    "MeUTaUcIdjoHeHDN/pM5CyEKl13nKSUcNMFYuokk6lGYsSGUTUau7uLb+lJmGlwWmWWXXyjFo6zpu3dddJyzi7hVQmlDaPce"
+    "UtWX1OfLcYMCr3hHBQ81MK7Q9uA1CLYCx06mL3QX50ZfQnXZqjqLzPCOl+xxmCCjG4VLDorAtkFJy2SHg3M4t3Sbe04nmp7E"
+    "JZFHh+tM844XvMYCAnLUB3JgxbmtkgpBaNtPpJaDK5bVl0515slQIMdLBILqiDKeAiXtwNYbOu7g0gNgMb4sKpMEg4tFicO+"
+    "A4m6i1cqKUOn6UxeRTB7lYEpPiaD7EPmdNfmjFSyWevXn9TpSx2oXmQRq8+brpt91lI21eQgap8vL3w5pkcyTEAk++tES/Jw"
+    "8OScl2PAfNSBnxkJdLpBvTcIf+RqZEx/R7cXsZFChdhgalNkz+1DooXi6TICGQ6k975d24qIR4QeU5hiAsuA0kTDNgrag8br"
+    "pAwbeVl1pfT6WHUO8EdWUacRypaKAfGWi0sWxUyugNe8G+nwJoG0lFi5KuKjz1KftzwhwBnRtWEc8s8CofSFnFc8quXxgp+o"
+    "9Bl0F12+UiqbFPCBTa66VFTZ4ik+Nn7fdCWdplpj6KTSCYL5q9X54arzhi3eEZJFcIA7kryBqRFSJl/XrK2/UpudLZ8SW2yb"
+    "ITWHQAFB7xwYOvFHtJH0KHJjgxWIq5uuS+e7wjY7HBj6AD3C5LJARcRTgQ12IMZeST9J1mSdN/zC+3i+lzZRKD2i/veohdX2"
+    "bXCCRqtrmvJ1abx1NR7veMEuPrahJ8YUFUVBDTEiz07edT0b3Ho6B4np1N1u+2zxlkNDZx4mxkGNshoncsnvKBsyNRHPwbmy"
+    "MM+63cps84YadSQ2EBCYKXq0nTI2cJnDCsCGTF0kqHSvwDt5ux2xwyvKRj02KM3tRCn/6KgBIkmXCmxwPLkabuieU60XWV1q"
+    "fN7xkhIBniEFUoaEw0YTGAuhMYRm+LddxFdqRdDdUY9x8DrgzdGXrEkr5D1bvKNi0jlWi3L0j9FF9W5hiq7ERiCRoelqtYPg"
+    "qhrsFDX5ircmldOk+ZapIM/P1mLoPEOme7UaTsAuL00PuU5VOlkAYjmGLl+ppGzGoh7jO4fs85w3eFi41Fr6CkUqJmtZwf2K"
+    "gW76YBeQpIuFVo/ldjvkFS+po/AQ5EzdTqfxxdEsJ6BR8FyoWKtp4/rXY7jdKrzke35mnxALF0GtZZxpWiK9Tp0GR9ht9bNX"
+    "h0t+u73jObtIwCJA4GAZ6JIGgk5BpXXGS5AqZmvlS2ykBLxnm7fUTOJLYhNyiMA1XasqZicSaYCuloDOqeepX0obM7rddqni"
+    "EWIbDy4EHENhONyCRR17dadfWRZ+oxoFgcLGWXb8BAvt9KFa0ZdQTVZ5xvc8p2JGVKix0didNfFWGTrx5iCbXPVuUuqWyy+U"
+    "TBEv36hutx0OqFInwDJBZTEmg/+8mKVMlPEpske0ThfJeL6hy70MNmbAPq8M85eDg8CPJ9yR6lnJUSSlBbrp/ctiqIRU2WKH"
+    "QzQOHgEWAiemCR71AW1HeqITdDohudVC5dh0kemyeKAvvMxpajxnnV84IiREcg2bGh4CO5VmWpPuMlqFw8+CY1J3t/ai6l/w"
+    "fJ3HHk8omxk+DgGHVJA4SEIUEmfkE1Z0m6Oq44Gf0RS7hsy1DEGbKlcuMHAB+2yxh089oiXkCEnexEqUGcc0DjNFn0ukmCSN"
+    "E2RX8tVTpkZOH2aW1ZlTx8/L4g2n9FYPMMR1wFP+bqCTZuCgZQqDdKKrTYwUMhXTNp9dfy7NgRI4+GRry+VTpG65/Ep1b2GJ"
+    "CfDddnjNARUgF8/DnBwnRhne6TpZHI/TxuxCplaLdf1ZSQ59jBNTp9x32+MNu9SwyKHicy4mqLOhcdt5zH8xXT4Dutn98iob"
+    "7dP1+hihqU4lWX5AmVe8iBjK0WQNc/NklWVEKXAfgYVgtXQGdKul10v1YzTB+lz4dIo7cF7zhjIhvgGs3ujAbqnyT7/Cl2hC"
+    "HPII1Uow17Ly1VoiINpOGprupBjKXNLeq0resst7aoawzsIFfENKPlkOUCPsbJG5P7N/DnQf7JZX/E3RoW0phjhNuVdTwuc9"
+    "L9ilZopNfSyghkJiJxrR9IT0WIh4lpdQv9k7B7r7lde180lxk98b3DCwQYa4XlNGG8NfxOWujLArYLDQBQ2frnbSbWhZ83vh"
+    "7yRV3Pixz/e2Bh31k2YEotelm6Ko8Avf8TMHCKx49qpIeJ/jO2AnEzrtZ7MKE7+MdoSVG1twjtTBr0uvK1F77XhuBY8MkiPc"
+    "LlxkTZ23PKWMwDN5bX1B2l8kEcFNoXpHtZE6KO6phw7BmKyvME4r1jt6WE2dHf7G97ynTjWerJi2/njdIcmNaNFljSiPvVLc"
+    "PQ3UY+u3OzJ0xqZcHALqWNiU8DqomdzjR/7KNh4CCzueMi5IU6+u7kry9DFDTZGv/qoMbRQmQOEw8oHGIXc2AQobzTuqZNtU"
+    "lezwhn3TCR8gcE0AOZ3mv6Y9vdDxSyokR/hgtnS6Kj2xbmxZ9+WYTqxGYBHiUWPvTGpQRYXn/I3vOcTHwwcsBH5MmdXICKQR"
+    "QN12JEiTTyPApnD469Jph/yUda+2Vz0yPoUYQ7jVxSNE8AaHj06M3NbU2WOHN3i4VJGmdisKGqkWj02n7rbTbdiyj0udJFy5"
+    "vne6fjp1ffBmf8XfHMejS+q4WCg0+9TwWSIfF9ZE/W5bvCVAo/AMsI1G/MAwl4iJmH7SiVovYAenydyZ0N2tbXk1soTHIiW6"
+    "jd+iBxA0dk3MUVOjzo/sUWQWF0WNCm8p4ZPB5ghlXIjmJ5MdTycadZHCaSW44tQb3MEnxEXhk0Mun7Qtz4UOPn7mrQSbyZGy"
+    "54VrB9eH3qzub9Qdv2EXBxtBiI/AJzARBvvEFMf0x0bavyI0BXw2ISH56m/2uoTuS+/97mvDYSQ6oLgdlHIS8ehRYVoRQwK8"
+    "hGRbOASmlzuYiMCW7oooIOoWj6pnnNUPds9z1s9YC7vOinUssSqGXuxgHctNeGhsMmRwkEBoymsskwzhgrFCa6NNAgJs5t5/"
+    "VekButtqfk+stkImOqKe7j8IpeN2+yiSGhKY+I5tqHpDAvTZSiOFDkG3Uqpxlq/tnR8iO3P9YTtflR1EJXQfVPtneT26hYQe"
+    "E0yOqjR03INrkb7bTJzQQrrFm2sffg8jhoiHM/v3Kz1CB4s7zmqnwLS+RvcxvFkkSiwCAtMyEVX/hoCFjY1lOnLSL2/dXCMN"
+    "N0eQr/zLy3aB6XPWcnnmwDr31IgBl+CJOFUTvaMde27aOOwYriDG0pnTu7rsDMBG/Zd8MFdqn1M4X+5eyVVlWI2tBCuWPsYa"
+    "cpylX5xq1uguVGaz6rcV2Abti07lACndEmrWLQ1Yp1084piKlQhCQqYPfrvTJ3RfejdeWg+DeBqwiju+znfB08V9ND6Gk/ZS"
+    "luxUl0jqWMzcP89A6RA6+M1erhKaqYiyZYZI95bVFd9mR+H3BzP7/7Q/AOjg5kt3lbjYWxjZ021NFn0JZa9bQ60pDI2e9SzZ"
+    "2h+2O8uft13L5YVd/cDCIYxr9DtxGC6j4kymnHrzb537N152WvrQwfr9dq5mYXEUm+pWTJrbqYd2meDTHYfBj991zup0ebk8"
+    "QOjgoxf2so7nb+tEh0w3WarLdteJrmsEpg//5SUMFLr7leKuvVIwXP6hmRslBjSy+eJBJjrOT4pEdjF7d2kLBgwdPNydOgwf"
+    "goOPwkZ0lHIRLdm+i6c89bGvdk+q4/pWK96/qBrHxln5YPdLbwjQwb89m92HABDmjS249NORu6tAa4YSIsCiILoNyNXi3q9L"
+    "MBTo4MNtawVyyDh/3k9lxuWEukGIGsZBr+hfs7Xfb8PQoLtfWdyRq1ls04Chuq4rvGhK83SF2a6LqZFMVlhoQgT5uzefwxCh"
+    "g3/enTnwV3qjqL48d935OfAmY7tPxP/rLC9t36sNGTr492d2ABlEFz/e6un0nxqa7EBXsyg9ROOQXZkvdebL9QkdfP5j5n4v"
+    "BDH6Kigdd/FgEqou9vK1ve5uuT6gu6NuvsjdlT3ly/SVmdJiYWYoVHsBrueE11eVxR17xTbUnzoO54i2hrRsW4l4kaIjnFo4"
+    "Fd14FpIMmS+6NU/6hA5W9q/vyNWcafuN6kY6H1g5WbLXTUyStiXCGMvcxiX/2c3nd3pM9Yt+PsxfFnYWg00PgQvUAadDFSom"
+    "hkJHM9gLwMWnDmSxyX1xc+tuDUYsdZGjMFdyVmRM/Ce6dM31KV/pdgEYwOcNgBwOmbs3+gCuT6kD+Gbp/bz/yANDCCo6rAQe"
+    "ylkaWk/c4FYNlywO9hcfbn9Voa/Gmj7XH7aLe/qBhY1P/WoyEO27drNI5N1+gRuA1AH8eeldMdg8QpPruzJSprQXdXDQWTh3"
+    "P3p+r0Yadur32/N7+kGBPN7A81lcODpV5+4nz/oHbkBSB/Dfi3tF/9GRacQPCU0Llehy3r0cGnf5aa8SHVuQuodZdMI0FIt4"
+    "dkKe3GcfP29QAKcEOviu+HqJzZqhRnIICQ2DeZIIQw/Y6e113KbukhRS99SWFTngPhoHC1anDj95dntAJdtikNbT94Wtj2uP"
+    "hUkfBvi48QhoyXDmMPcam+l0Nq3ouslKHHMFZKOtbHX24N+eDfDJB7uVjwvbS7WfojYqjSagYOZ2DL+7u5sJc50TT/XWZt0c"
+    "9uLh4OAil2f2Oy0YGgt08FQ+u1PJiw0PiaQaU/aKoc9/6wW6wX8ecewdnGiYyxfXd35VHvA7DSN+8adb+zPVTUHGSNywGWu7"
+    "H/w7PLo3cazjMIfAubu0vVwe+DsNZyvXi9tLR5sCl3rcnUMceB13Ad0oMvbaHCVn9dreh9u3h/DYYlgP8JP7+sZeUaz5WFim"
+    "vXiYo3xFD2bKMLRAciivTfb+XKlds1XqoAP4461q/uixipWIMsZysutcDpwyZ7B+WmfvqFBmVJlHxkwmyKxka4s7g1eUI4EO"
+    "NuZfL9Ue+QRkKBByiDPmrPmgXZRm31OUP8kQosmQuT9dHqxFOWLo4O/Z7Y/qbvjIx0fiEjDe/Joc8HHxDJUjBsKAPO59SxV3"
+    "uymHTSV0AH9Z2CvWH9fROCcUlpj4WUENQoLIe3Vx70+V//XlCPTHaBTWD9nXN6r5cNM/Rmgz+UsmmkQt3JVcda40bHkbKXQA"
+    "/zP/ZvGooNaYuNEstKE8BhsHiXN3Zv93O6N6XzHarfv65vt5b1ONUVXqoYzTkDgrMwfXX3fepzNx0MHjwl6xPONvqjFJ3KBj"
+    "KCEu7nK2Nio1OUbooljLXtFz/c3AcPhrM/tD4bU0O6VjhHuDyleaelMbiTI9hi4Ozt2Z/d/ujOFzjeuu+Wbp7YKS1npgJkUp"
+    "Y2SrBGdz1AvDmAc7NdwJy1BdRdx5NqCxVuZKwwlzpRg6gLWF3cVQqg0dFwNKgpaYZzpGJ+kW5rKI7kc8yNbm94p7t8d2tsS4"
+    "t+a74t5CpaDXLLNFoQko6QT/3rjHITX4mRp+nL3qBLOlP2yP+ZOl4VRvzu4uVPPBBoloZ2Mmj0qFxFnYRnnrh/lKcfc3e+Pf"
+    "NZEWv+qJfLNYKlYL6huRoPhIT2eORjx061OHC68HUc11oaDDhKvfz1fz/iax+rR6mJXDQKedgMBZztZmR27+TxR0AE9laf79"
+    "/FE+3KCD+SDDgy6SfnslV50qz+5/4aVtn0RaA1E/20eFw6nDac9VG5i7r5GuFXGDytnleQ21Gybyg+IEIT9IY+43/MnQ3LES"
+    "ayVXnS4XymlRkBMDXVOF1rLVQi3rb2ozT6TBty5olcpGJ46M2QND45W1ZtGbVaHCjIQwqVFDnCpXHC9fmTosVD4L0rwzYjLC"
+    "v0/lwWwlX8v5rhV4P/iGMl8ckzWdmCjQiMmoY7lxcaxVTJjhF+CuZLxsbbaUO0o3ZBMGXXM9mj7KHhV8W8nA9h81ZkSKhAJU"
+    "hvqxqQAF8hiUUSeujXUfIFOb2c9XnOC2mqSdEJObdPnZruc813O9jOeGUkkltWRDJ8oOmlNKoiVXpBIIJZWlHC9Tz1UnRcIu"
+    "GHQn1z/swA6cwA4jGAGhBBiw7MCpfx5cnKf9X7ZQyUXgmq+bAAAAAElFTkSuQmCC"
+)
+
+_WHITE_PLAY_CACHE = None
+
+
+def _white_play_asset():
+    """Giai ma + cache anh nut play trang (RGBA). Chi doc 1 lan duy nhat."""
+    global _WHITE_PLAY_CACHE
+    if _WHITE_PLAY_CACHE is None:
+        import io
+        _WHITE_PLAY_CACHE = Image.open(
+            io.BytesIO(base64.b64decode(_WHITE_PLAY_B64))).convert("RGBA")
+    return _WHITE_PLAY_CACHE
+
+
+def _draw_white_play_badge(base, scale: float, shadow: bool = True):
+    """Nut play TRANG: dia xam dac + tam giac trang nhon (asset PNG that).
+
+    Dung cho kieu "white".  Anh nam san trong _WHITE_PLAY_B64 nen khong
+    can file roi di kem - tool van chay khi chi co 1 file .py.
+    Ve o 4x roi LANCZOS thu nho nen khong bi rang cua.
+    """
+    w, h = base.size
+    size = max(24, int(round(min(w, h) * float(scale))))
+    art = _white_play_asset()
+    if art.width != size:
+        art = art.resize((size, size), Image.LANCZOS)
+    out = base.copy()
+    out.alpha_composite(art, ((w - size) // 2, (h - size) // 2))
+    return out
+
+
 def draw_youtube_badge(img, style: str = "play", scale: float = 0.30, shadow: bool = True):
     """Ve huy hieu YouTube vao CHINH GIUA anh.
 
-    style="play" -> o do bo goc + tam giac trang (giong 1 video chua mo)
-    style="logo" -> o do bo goc + tam giac + chu "YouTube" mau trang
-    scale        -> chieu rong huy hieu / chieu rong anh (0.30 = 30%)
+    style="play"  -> o do bo goc + tam giac trang (giong 1 video chua mo)
+    style="logo"  -> o do bo goc + tam giac + chu "YouTube" mau trang
+    style="white" -> nut play TRANG (asset PNG that nhung san trong code):
+                     dia xam dac #B0B0B0 + tam giac trang nhon, vien cung
+    scale         -> chieu rong huy hieu / chieu rong anh (0.30 = 30%)
     """
     from PIL import ImageDraw
     base = img.convert("RGBA")
     w, h = base.size
-    is_logo = str(style or "").strip().lower().startswith("logo")
+    style_key = str(style or "").strip().lower()
+    is_logo = style_key.startswith("logo")
+    is_white = style_key.startswith("white") or style_key.startswith("trang")
     try:
         scale = float(scale)
     except Exception:
         scale = 0.30
     scale = max(0.05, min(scale, 0.95))
+    if is_white:
+        return _draw_white_play_badge(base, scale, shadow).convert("RGB")
     bw = int(round(w * scale))
     bh = int(round(bw / (2.05 if is_logo else 1.417)))
     bw = max(16, min(bw, max(16, w - 2)))
@@ -4438,7 +4868,7 @@ Return STRICT JSON only:
         if not bool(self.cfg.get("youtube_badge_on_cover", False)):
             return "", 0.0
         style = str(self.cfg.get("youtube_badge_style", "play") or "play").strip().lower()
-        if style not in ("play", "logo"):
+        if style not in ("play", "logo", "white"):
             style = "play"
         try:
             pct = float(str(self.cfg.get("youtube_badge_scale", "30")).strip() or "30")
@@ -5228,11 +5658,199 @@ Return STRICT JSON only:
             "response": data,
         }
 
+    def _slink_headers(self, token: str) -> dict:
+        """Header cho API fableon (Laravel): Bearer <id|secret>."""
+        base = str(self.cfg.get("slink_base_url") or "https://fableon.treeiq.biz/api").strip().rstrip("/")
+        host = urlsplit(base).netloc or "fableon.treeiq.biz"
+        return {
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"),
+            "Referer": f"https://{host}/admin/dashboard",
+            "Origin": f"https://{host}",
+        }
+
+
+    def _slink_locale(self) -> str:
+        """Slot ngon ngu fableon dung cho title/content/seo_* (en/vi/zh/ko).
+
+        fableon chi co 4 slot; ngon ngu khac (Nhat, Han, Tay Ban Nha...) khong co
+        slot rieng nen ghi vao 'en' — dung nhu hanh vi cu.
+        """
+        key = effective_language(self.cfg)
+        return {"Vietnamese": "vi", "Chinese": "zh", "Korean": "ko"}.get(key, "en")
+
+
+    def _slink_send(self, payload: dict, endpoint: str = ""):
+        """POST len fableon kem retry loi TAM THOI. Tra (response, data, payload)."""
+        base = str(self.cfg.get("slink_base_url") or "https://fableon.treeiq.biz/api").strip().rstrip("/")
+        endpoint = endpoint or f"{base}/posts/chapter"
+        token = str(self.cfg.get("slink_api_key", "") or "").strip()
+        headers = self._slink_headers(token)
+        max_attempts = max(1, min(6, safe_int(self.cfg.get("slink_retry_count", 3), 3)))
+        base_delay = max(5.0, safe_float(self.cfg.get("slink_retry_delay", 30), 30.0))
+        r = None
+        data = {}
+        for attempt in range(1, max_attempts + 1):
+            try:
+                r = requests.post(endpoint, headers=headers, json=payload, timeout=180)
+            except Exception as e:
+                r = None
+                data = {"network_error": str(e)}
+                if attempt >= max_attempts:
+                    break
+                wait_s = min(base_delay * (2 ** (attempt - 1)), 300.0)
+                self._log(f"Slink network error ({e}) | thu lai {attempt + 1}/{max_attempts} sau {wait_s:.0f}s")
+                time.sleep(wait_s)
+                continue
+            try:
+                data = r.json()
+            except Exception:
+                data = {"raw": r.text[:2000]}
+            if r.status_code in (200, 201):
+                break
+            if attempt >= max_attempts or not _adsconex_is_transient(r.status_code, data):
+                break
+            wait_s = max(5.0, _adsconex_retry_after_seconds(r, base_delay * (2 ** (attempt - 1))))
+            detail = json.dumps(data, ensure_ascii=False)[:200] if isinstance(data, (dict, list)) else str(data)[:200]
+            self._log(f"Slink HTTP {r.status_code} (loi tam thoi) | thu lai {attempt + 1}/{max_attempts} "
+                      f"sau {wait_s:.0f}s | {detail}")
+            time.sleep(wait_s)
+        return r, data, payload
+
+
+    def publish_slink(self, story: dict) -> dict:
+        """Đăng bài lên Slink (fableon.treeiq.biz) ở chế độ chapter qua REST API.
+
+        POST /api/posts/chapter cần title + content + chapters[] (mảng >= 1).
+        Server lưu sẵn từng chương; phân trang trong 1 chương dùng {{nextpage}}.
+        """
+        self._step_start("Slink publish")
+        token = str(self.cfg.get("slink_api_key", "") or "").strip()
+        if not token:
+            raise RuntimeError("Slink API token đang trống. Nhập trong tab Slink.")
+
+        base = str(self.cfg.get("slink_base_url") or "https://fableon.treeiq.biz/api").strip().rstrip("/")
+        endpoint = f"{base}/posts/chapter"
+
+        chapters = story.get("chapters", []) or []
+        if not chapters:
+            raise RuntimeError("Truyện chưa có chapter nào để đăng dạng series.")
+
+        # fableon CHI hieu {{nextpage}}. Marker <!--nextpage--> (dung cho
+        # SmartTraffic) bi server coi la HTML comment va xoa sach -> mat phan trang.
+        # Vi vay KHONG lay theo cfg["pagebreak_mode"], luon dung {{nextpage}}.
+        slink_chapters = build_slink_chapters(story, "{{nextpage}}")
+        if not slink_chapters:
+            raise RuntimeError("Không dựng được nội dung chapter cho Slink.")
+
+        locale = self._slink_locale()
+        title_text = compact_meta_text(story.get("title") or "Untitled Story", 240)
+        intro = compact_meta_text(story.get("meta_description") or story.get("summary") or "", 600)
+        thumb = (story.get("thumbnail_url") or "").strip()
+
+        payload = {
+            "title": slink_localized_value(title_text, locale),
+            "content": slink_localized_value(
+                f"<p>{html_escape(intro)}</p>" if intro else "", locale),
+            "slug": safe_slug(story.get("slug") or title_text or "story"),
+            "status": str(self.cfg.get("slink_status") or "published").strip() or "published",
+            "type": "post",
+            "chapter_skip_intro": True,
+            "chapters": slink_chapters,
+        }
+        raw_category = str(self.cfg.get("slink_category", "") or "").strip()
+        if raw_category.isdigit():
+            payload["category_id"] = int(raw_category)
+        raw_site = str(self.cfg.get("slink_site_id", "") or "").strip()
+        if raw_site.isdigit():
+            payload["site_ids"] = [int(raw_site)]
+        if thumb.startswith("https://"):
+            payload["featured_image"] = thumb
+        # fableon yeu cau seo_* la ARRAY da ngon ngu; gui string -> 422.
+        # Gui kem ca 'en' lam fallback: theme hien tai render the <title>/og tu
+        # key 'en', chi gui {vi:...} thi cac the do rong.
+        seo_title = clean_meta_text(story.get("meta_title") or story.get("title") or "", 240)
+        seo_desc = clean_meta_text(story.get("meta_description") or "", 500)
+        if seo_title:
+            payload["seo_title"] = slink_localized_value(seo_title, locale)
+        if seo_desc:
+            payload["seo_description"] = slink_localized_value(seo_desc, locale)
+
+        if self.work_dir:
+            try:
+                _safe_write_text(self.work_dir / "publish_payload_slink.json",
+                                 json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+
+        self._log(f"Slink POST {endpoint} | chapters={len(slink_chapters)} | locale={locale}")
+        r, data, payload = self._slink_send(payload, endpoint)
+
+        if self.work_dir:
+            try:
+                _safe_write_text(self.work_dir / "publish_response_slink.json",
+                                 json.dumps({"http_status": (r.status_code if r is not None else "network"),
+                                             "response": data}, ensure_ascii=False, indent=2),
+                                 encoding="utf-8")
+            except Exception:
+                pass
+
+        if r is None or r.status_code not in (200, 201):
+            detail = (json.dumps(data, ensure_ascii=False)[:600]
+                      if isinstance(data, (dict, list)) else str(data)[:600])
+            # 401/403/422 Laravel tra ngay -> CHUA tao bai -> luu payload dang lai an toan.
+            # 502/503/504/429 = Cloudflare/origin loi tam thoi -> luu payload.
+            if r is None or r.status_code in (401, 403, 422, 429, 500, 502, 503, 504,
+                                              520, 521, 522, 523, 524):
+                slink_write_pending(self.work_dir, payload,
+                                    (r.status_code if r is not None else "network"), detail)
+            raise RuntimeError(
+                f"Slink dang bai that bai (HTTP {r.status_code if r is not None else 'network'}): {detail}")
+
+        site_host = self.cfg.get("slink_site_host", "")
+        link = published_slink_link(data if isinstance(data, dict) else {}, site_host)
+        if not link:
+            slug = str(payload.get("slug") or "").strip()
+            host = urlsplit("https://" + re.sub(r"^https?://", "", str(site_host).strip().strip("/"))).netloc
+            link = f"https://{host}/{slug}" if host and slug else ""
+
+        post_id = ""
+        if isinstance(data, dict):
+            for key in ("id", "post_id"):
+                if str(data.get(key) or "").strip().isdigit():
+                    post_id = str(data[key]).strip()
+                    break
+            if not post_id and isinstance(data.get("data"), dict):
+                for key in ("id", "post_id"):
+                    if str(data["data"].get(key) or "").strip().isdigit():
+                        post_id = str(data["data"][key]).strip()
+                        break
+
+        self._log(f"Slink accepted | HTTP {r.status_code} | chapters={len(slink_chapters)} | url={link}")
+        self._step_end("Slink publish")
+        slink_clear_pending(self.work_dir)
+        return {
+            "url": link,
+            "id": post_id or None,
+            "chapters": slink_chapters,
+            "count": len(slink_chapters),
+            "provider": "Slink",
+            "chapter_verified": True,
+            "response": data,
+        }
+
+
     def publish_current(self, story: dict) -> dict:
-        """Chon net theo cai dat trong GUI: SmartTraffic hoac Adsconex."""
+        """Chọn net theo cài đặt trong GUI: SmartTraffic, Adsconex hoặc Slink."""
         provider = str(self.cfg.get("net_provider") or "SmartTraffic").strip().lower()
         if provider.startswith("ads"):
             return self.publish_adsconex(story)
+        if provider.startswith("slink"):
+            return self.publish_slink(story)
         return self.publish_smarttraffic(story)
 
     def publish_smarttraffic(self, story: dict) -> dict:
@@ -5659,6 +6277,97 @@ Return STRICT JSON only:
         finally:
             self.work_dir = previous_work_dir
 
+    def republish_pending_slink(self, work_dir, payload: dict) -> dict:
+        """Dang lai payload da luu cua bai Slink loi. KHONG ton Vision/Writer."""
+        work_dir = Path(work_dir)
+        previous_work_dir = self.work_dir
+        self.work_dir = work_dir
+        try:
+            base = str(self.cfg.get("slink_base_url") or "https://fableon.treeiq.biz/api").strip().rstrip("/")
+            r, data, payload = self._slink_send(payload, f"{base}/posts/chapter")
+            try:
+                _safe_write_text(work_dir / "publish_response_slink.json",
+                                 json.dumps({"http_status": (r.status_code if r is not None else "network"),
+                                             "response": data},
+                                            ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+
+            if r is None or r.status_code not in (200, 201):
+                detail = (json.dumps(data, ensure_ascii=False)[:600]
+                          if isinstance(data, (dict, list)) else str(data)[:600])
+                slink_write_pending(work_dir, payload,
+                                    (r.status_code if r is not None else "network"), detail)
+                self._log(f"[{work_dir.name}] Vẫn lỗi: {detail[:200]}")
+                return {}
+
+            site_host = self.cfg.get("slink_site_host", "")
+            link = published_slink_link(data if isinstance(data, dict) else {}, site_host)
+            if not link:
+                slug = str(payload.get("slug") or "").strip()
+                host = urlsplit("https://" + re.sub(r"^https?://", "", str(site_host).strip().strip("/"))).netloc
+                link = f"https://{host}/{slug}" if host and slug else ""
+
+            post_id = ""
+            if isinstance(data, dict):
+                for key in ("id", "post_id"):
+                    if str(data.get(key) or "").strip().isdigit():
+                        post_id = str(data[key]).strip()
+                        break
+                if not post_id and isinstance(data.get("data"), dict):
+                    for key in ("id", "post_id"):
+                        if str(data["data"].get(key) or "").strip().isdigit():
+                            post_id = str(data["data"][key]).strip()
+                            break
+
+            publish_result = {
+                "url": link,
+                "id": post_id or None,
+                "chapters": payload.get("chapters") or [],
+                "count": len(payload.get("chapters") or []),
+                "provider": "Slink",
+                "chapter_verified": True,
+                "response": data,
+                "republished_from_pending": True,
+                "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            try:
+                _safe_write_text(work_dir / "publish_result.json",
+                                 json.dumps(publish_result, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+            slink_clear_pending(work_dir)
+            self._log(f"[{work_dir.name}] ĐÃ ĐĂNG LẠI | HTTP {r.status_code} | url={link}")
+
+            story = {}
+            try:
+                story_path = work_dir / "story.json"
+                if story_path.is_file():
+                    story = json.loads(story_path.read_text(encoding="utf-8") or "{}")
+            except Exception:
+                story = {}
+            video_path = None
+            try:
+                src = work_dir / "source_video.json"
+                if src.is_file():
+                    info = json.loads(src.read_text(encoding="utf-8") or "{}")
+                    video_path = Path(str(info.get("path") or ""))
+            except Exception:
+                video_path = None
+            renamed = ""
+            if isinstance(story, dict) and story and video_path is not None and video_path.is_file():
+                script_path = work_dir / "video_script.txt"
+                script_text = script_path.read_text(encoding="utf-8") if script_path.is_file() else ""
+                try:
+                    renamed = self.rename_published_video(video_path, story, publish_result, script_text)
+                except Exception as exc:
+                    self._log(f"[{work_dir.name}] Đăng OK nhưng đổi tên video lỗi: {exc}")
+            return {"work_dir": str(work_dir), "story": story,
+                    "publish_result": publish_result, "renamed_video": renamed}
+        finally:
+            self.work_dir = previous_work_dir
+
+
     def _republish_with_alternate_marker(self, story: dict, marker: str, headers: dict) -> Optional[dict]:
         """V21.1: Re-post the same story with a different page-break marker so the
         story theme on the website can paginate even when the first marker fails."""
@@ -5722,6 +6431,8 @@ Return STRICT JSON only:
         provider = str(self.cfg.get("net_provider") or "SmartTraffic").strip().lower()
         if provider.startswith("ads"):
             link = published_adsconex_link(result, self.cfg.get("adsconex_site_host", ""))
+        elif provider.startswith("slink"):
+            link = published_slink_link(result, self.cfg.get("slink_site_host", ""))
         else:
             link = published_article_link(result, self.cfg.get("site_host", ""))
         if not link:
@@ -6644,7 +7355,7 @@ class App(tk.Tk):
 
         ttk.Label(source, text="Net đăng bài").grid(row=1, column=2, sticky="e", padx=(12, 6), pady=4)
         ttk.Combobox(source, textvariable=self.vars["net_provider"],
-                     values=("SmartTraffic", "Adsconex"), state="readonly", width=16).grid(
+                     values=("SmartTraffic", "Adsconex", "Slink"), state="readonly", width=16).grid(
                          row=1, column=3, sticky="w", pady=4)
 
         ttk.Label(
@@ -6666,6 +7377,7 @@ class App(tk.Tk):
         ai = ttk.Frame(nb, padding=5)
         st = ttk.Frame(nb, padding=10)
         ads = ttk.Frame(nb, padding=10)
+        slink = ttk.Frame(nb, padding=10)
         img = ttk.Frame(nb, padding=10)
         settings_tab = ttk.Frame(nb, padding=10)
         guide_tab = ttk.Frame(nb, padding=10)
@@ -6675,6 +7387,7 @@ class App(tk.Tk):
         nb.add(ai, text="Vilao AI")
         nb.add(st, text="SmartTraffic")
         nb.add(ads, text="Adsconex")
+        nb.add(slink, text="Slink")
         nb.add(img, text="Image hosting")
         nb.add(settings_tab, text="FFmpeg")
         nb.add(guide_tab, text="Hướng dẫn")
@@ -6954,6 +7667,99 @@ class App(tk.Tk):
         ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 2))
 
         # ============================================================
+        # SLINK (fableon) - dang bai che do chapter qua REST API
+        # ============================================================
+        slink.columnconfigure(1, weight=1)
+
+        ttk.Label(slink, text="Slink API Token", width=22).grid(row=0, column=0, sticky="w", pady=4)
+        self.slink_key_entry = ttk.Entry(
+            slink, textvariable=self.vars["slink_api_key"], show="*"
+        )
+        self.slink_key_entry.grid(row=0, column=1, sticky="ew", pady=4)
+        self.slink_key_editing = False
+        self.slink_edit_btn = ttk.Button(
+            slink, text="Edit Key", command=self.toggle_slink_key_edit
+        )
+        self.slink_edit_btn.grid(row=0, column=2, padx=(8, 0), pady=4)
+
+        self._row(slink, 1, "API base URL", "slink_base_url")
+        self._row(slink, 2, "Site host", "slink_site_host")
+        self._row(slink, 3, "Site ID (số)", "slink_site_id")
+        slink_cat = ttk.Frame(slink)
+        slink_cat.grid(row=4, column=0, columnspan=3, sticky="w", pady=4)
+        ttk.Label(slink_cat, text="Category ID (số)", width=22).pack(side="left")
+        ttk.Entry(slink_cat, textvariable=self.vars["slink_category"], width=12).pack(side="left")
+        ttk.Button(slink_cat, text="Lấy danh sách", command=self.fetch_slink_categories).pack(
+            side="left", padx=(8, 0))
+
+        slink_status_row = ttk.Frame(slink)
+        slink_status_row.grid(row=5, column=0, columnspan=3, sticky="w", pady=4)
+        ttk.Label(slink_status_row, text="Trạng thái bài", width=22).pack(side="left")
+        ttk.Combobox(
+            slink_status_row, textvariable=self.vars["slink_status"],
+            values=("published", "draft"), state="readonly", width=12
+        ).pack(side="left")
+
+        ttk.Label(
+            slink,
+            text=(
+                "Đăng ở mode=chapter: mỗi chapter gửi kèm trong 1 request POST "
+                "/api/posts/chapter (cần title + content + chapters[]). Server tự "
+                "lưu từng chương; phân trang TRONG một chương dùng marker {{nextpage}}.\\n"
+                "Link bài dạng /<slug> (không có tiền tố /blog/).\\n"
+                "API dùng Bearer token dạng id|secret — tạo ở trang /admin/settings/api-tokens "
+                "của site. Token chỉ đọc từ ô nhập này, KHÔNG đọc từ .env."
+            ),
+            foreground="#555",
+            wraplength=950,
+            justify="left"
+        ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 4))
+
+        slink_buttons = ttk.Frame(slink)
+        slink_buttons.grid(row=7, column=0, columnspan=3, sticky="w", pady=4)
+        ttk.Button(
+            slink_buttons,
+            text="Kiểm tra token",
+            command=self.test_slink_token
+        ).pack(side="left")
+        ttk.Button(
+            slink_buttons,
+            text="Mở trang API token",
+            command=lambda: webbrowser.open(
+                "https://" + re.sub(
+                    r"^https?://", "",
+                    str(self.vars["slink_site_host"].get() or "fableon.treeiq.biz").strip().strip("/"),
+                    flags=re.I) + "/admin/settings/api-tokens")
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            slink_buttons,
+            text="Lấy link site",
+            command=lambda: webbrowser.open(
+                "https://" + re.sub(
+                    r"^https?://", "",
+                    str(self.vars["slink_site_host"].get() or "fableon.treeiq.biz").strip().strip("/"),
+                    flags=re.I))
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            slink_buttons,
+            text="Đăng lại bài lỗi",
+            command=self.republish_failed_posts
+        ).pack(side="left", padx=6)
+
+        slink_retry = ttk.LabelFrame(slink, text="Thử lại khi net lỗi tạm thời (502/503/429)")
+        slink_retry.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(10, 4))
+        slink_retry.columnconfigure(1, weight=1)
+        self._row(slink_retry, 0, "Số lần thử lại", "slink_retry_count")
+        self._row(slink_retry, 1, "Chờ giữa các lần (giây)", "slink_retry_delay")
+        ttk.Label(
+            slink_retry,
+            text=(
+                "Chỉ thử lại khi lỗi TẠM THỜI (502/503/504/429/timeout). Lỗi 401/403/422 "
+                "dừng ngay để không đăng trùng. Mỗi lần chờ gấp đôi lần trước."
+            ),
+            foreground="#555", justify="left", wraplength=950
+        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 2))
+
         # IMAGE HOSTING - only credentials are editable
         # ============================================================
         img.columnconfigure(1, weight=1)
@@ -6995,7 +7801,7 @@ class App(tk.Tk):
         ttk.Label(badge_box, text="Kiểu logo", width=22).grid(row=1, column=0, sticky="w", pady=3)
         ttk.Combobox(
             badge_box, textvariable=self.vars["youtube_badge_style"],
-            values=("play", "logo"), state="readonly", width=12
+            values=("play", "logo", "white"), state="readonly", width=12
         ).grid(row=1, column=1, sticky="w", pady=3)
 
         ttk.Label(badge_box, text="Kích thước (% chiều rộng ảnh)", width=28).grid(
@@ -7016,7 +7822,9 @@ class App(tk.Tk):
 
         ttk.Label(
             badge_box,
-            text=("Kiểu 'play' = nút play đỏ (khuyên dùng, giống video chưa mở). "
+            text=("Kiểu 'play' = nút play đỏ (khuyên dùng, giống video chưa mở).\n"
+                  "Kiểu 'white' = nút play TRẮNG: vòng tròn xám + tam giác "
+                  "trắng (giống nút play overlay trên Facebook).\n"
                   "Kiểu 'logo' = thêm chữ YouTube.\n"
                   "Mặc định TẮT: ảnh bìa giữ nguyên như trước. Ảnh bìa Facebook "
                   "KHÔNG bị ảnh hưởng."),
@@ -7180,7 +7988,7 @@ class App(tk.Tk):
         import tempfile
         cfg = self.current_cfg()
         style = str(cfg.get("youtube_badge_style", "play") or "play").strip().lower()
-        if style not in ("play", "logo"):
+        if style not in ("play", "logo", "white"):
             style = "play"
         try:
             pct = float(str(cfg.get("youtube_badge_scale", "30")).strip() or "30")
@@ -7263,6 +8071,120 @@ class App(tk.Tk):
                         editor.insert("1.0", wanted)
         except Exception:
             pass
+
+    def toggle_slink_key_edit(self):
+        """Reveal/mask the Slink (fableon) API token while keeping the field editable."""
+        self.slink_key_editing = not self.slink_key_editing
+        if self.slink_key_editing:
+            self.slink_key_entry.configure(show="")
+            self.slink_edit_btn.configure(text="Hide Key")
+            self.slink_key_entry.focus_set()
+            self.slink_key_entry.icursor("end")
+        else:
+            self.slink_key_entry.configure(show="*")
+            self.slink_edit_btn.configure(text="Edit Key")
+
+
+    def test_slink_token(self):
+        """GET /posts để kiểm tra token + kết nối Slink (chạy nền, không treo GUI)."""
+        token = str(self.vars["slink_api_key"].get() or "").strip()
+        if not token:
+            messagebox.showwarning(APP_NAME, "Chưa nhập Slink API Token.")
+            return
+        base = str(self.vars["slink_base_url"].get() or "https://fableon.treeiq.biz/api").strip().rstrip("/")
+        host = urlsplit(base).netloc or str(self.vars["slink_site_host"].get() or "fableon.treeiq.biz")
+        headers = {
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"),
+            "Referer": f"https://{host}/admin/dashboard",
+            "Origin": f"https://{host}",
+        }
+
+        def _worker():
+            try:
+                r = requests.get(f"{base}/posts", headers=headers, timeout=45)
+                if r.status_code == 200:
+                    try:
+                        data = r.json()
+                    except Exception:
+                        data = {}
+                    rows = data.get("data") if isinstance(data, dict) else None
+                    if rows is None and isinstance(data, dict):
+                        rows = data.get("posts")
+                    count = len(rows) if isinstance(rows, list) else "?"
+                    self.log(f"Slink token OK — HTTP 200 | bài hiện có: {count}\n")
+                    self.q.put(("slink_test",
+                                f"Slink OK — token hợp lệ.\n\nBài hiện có trên site: {count}"))
+                elif r.status_code in (401, 403):
+                    snippet = (r.text or "")[:300]
+                    why = ("Token bị từ chối. Kiểm tra: (1) token còn hiệu lực không, "
+                           "(2) API base URL có đúng host không (" + host + "), "
+                           "(3) token có đúng dạng id|secret không.")
+                    self.log(f"Slink token FAIL — HTTP {r.status_code} | {snippet}\n")
+                    self.q.put(("slink_test", f"Slink HTTP {r.status_code}\n\n{why}\n\nChi tiết: {snippet}"))
+                else:
+                    snippet = (r.text or "")[:300]
+                    self.log(f"Slink token FAIL — HTTP {r.status_code}: {snippet}\n")
+                    self.q.put(("slink_test", f"Slink HTTP {r.status_code}\n\n{snippet}"))
+            except Exception as e:
+                self.log(f"Slink token FAIL — {e}\n")
+                self.q.put(("slink_test", f"Không gọi được Slink:\n{e}"))
+
+        self.log(f"Đang kiểm tra Slink token ({host})...\n")
+        threading.Thread(target=_worker, daemon=True).start()
+
+
+    def fetch_slink_categories(self):
+        """Lấy danh sách category của Slink rồi cho chọn (chạy nền)."""
+        token = str(self.vars["slink_api_key"].get() or "").strip()
+        if not token:
+            messagebox.showwarning(APP_NAME, "Chưa nhập Slink API Token.")
+            return
+        base = str(self.vars["slink_base_url"].get() or "https://fableon.treeiq.biz/api").strip().rstrip("/")
+        host = urlsplit(base).netloc or str(self.vars["slink_site_host"].get() or "fableon.treeiq.biz")
+        headers = {
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"),
+            "Referer": f"https://{host}/admin/dashboard",
+            "Origin": f"https://{host}",
+        }
+
+        def _worker():
+            try:
+                r = requests.get(f"{base}/categories", headers=headers, timeout=45)
+                if r.status_code != 200:
+                    self.q.put(("slink_categories", ("error", f"HTTP {r.status_code}\n\n{(r.text or '')[:300]}")))
+                    return
+                try:
+                    data = r.json()
+                except Exception:
+                    data = {}
+                rows = data.get("data") if isinstance(data, dict) else None
+                if rows is None and isinstance(data, dict):
+                    rows = data.get("categories")
+                if not isinstance(rows, list) or not rows:
+                    self.q.put(("slink_categories", ("error", "Không thấy category nào trong response.")))
+                    return
+                out = []
+                for c in rows:
+                    if not isinstance(c, dict):
+                        continue
+                    out.append((str(c.get("id", "")),
+                                str(c.get("title") or c.get("name") or c.get("slug") or ""),
+                                str(c.get("slug") or "")))
+                self.q.put(("slink_categories", ("ok", out)))
+            except Exception as e:
+                self.q.put(("slink_categories", ("error", str(e))))
+
+        self.log(f"Đang lấy category Slink ({host})...\n")
+        threading.Thread(target=_worker, daemon=True).start()
+
 
     def test_cloudinary(self):
         cfg = self.current_cfg()
@@ -7737,6 +8659,40 @@ class App(tk.Tk):
         ttk.Button(btns, text="Chọn", command=_apply).pack(side="right")
         ttk.Button(btns, text="Đóng", command=win.destroy).pack(side="right", padx=(0, 6))
 
+    def show_slink_categories(self, payload):
+        """Popup chọn category Slink; bấm 1 dòng là điền ID vào ô."""
+        kind, data = payload
+        if kind == "error":
+            messagebox.showerror("Slink categories", data)
+            return
+        win = tk.Toplevel(self)
+        win.title("Chọn category — Slink")
+        win.transient(self)
+        win.grab_set()
+        ttk.Label(
+            win, text="Bấm 1 dòng để điền Category ID (bấm đúp cũng được):"
+        ).pack(anchor="w", padx=10, pady=(10, 4))
+        box = tk.Listbox(win, width=64, height=min(18, max(4, len(data))))
+        box.pack(fill="both", expand=True, padx=10, pady=4)
+        for cid, name, slug in data:
+            box.insert("end", f"{cid:>5}  |  {name}  ({slug})")
+
+        def _apply(_evt=None):
+            sel = box.curselection()
+            if not sel:
+                return
+            cid = data[sel[0]][0]
+            self.vars["slink_category"].set(cid)
+            self.log(f"Đã chọn Slink category ID = {cid}\n")
+            win.destroy()
+
+        box.bind("<Double-Button-1>", _apply)
+        btns = ttk.Frame(win)
+        btns.pack(fill="x", padx=10, pady=(4, 10))
+        ttk.Button(btns, text="Chọn", command=_apply).pack(side="right")
+        ttk.Button(btns, text="Đóng", command=win.destroy).pack(side="right", padx=(0, 6))
+
+
     def _poll_queue(self):
         try:
             while True:
@@ -7786,7 +8742,13 @@ class App(tk.Tk):
                         messagebox.showinfo("Adsconex token", item[1])
                     else:
                         messagebox.showerror("Adsconex token", item[1])
-                elif item[0] == "adsconex_categories":
+                elif item[0] == "slink_categories":
+                    self.show_slink_categories(item[1])
+                elif item[0] == "slink_test":
+                    if "OK" in item[1]:
+                        messagebox.showinfo("Slink token", item[1])
+                    else:
+                        messagebox.showerror("Slink token", item[1])
                     self.show_adsconex_categories(item[1])
                 elif item[0] == "adsconex_republish_done":
                     ok, fail = item[1]
@@ -7825,35 +8787,46 @@ class App(tk.Tk):
 
 
     def republish_failed_posts(self):
-        """Quet folder dang chon: dang lai moi bai da luu payload (502) - khong ton Vision/Writer."""
+        """Quet folder dang chon: dang lai moi bai da luu payload (502) - khong ton Vision/Writer.
+
+        Chay theo net dang chon: SmartTraffic, Adsconex hoac Slink.
+        """
         p1 = self.input_path.get().strip()
         folder = Path(p1) if p1 and Path(p1).is_dir() else None
         if folder is None:
             messagebox.showinfo(APP_NAME, "Chọn folder batch vào ô đường dẫn trước, rồi bấm lại.")
             return
         cfg = self.current_cfg()
-        use_ads = str(cfg.get("net_provider") or "").strip().lower().startswith("ads")
+        provider = str(cfg.get("net_provider") or "").strip().lower()
+        is_ads = provider.startswith("ads")
+        is_slink = provider.startswith("slink")
         output_root = folder / "Story Outputs"
 
-        # Nhat CA HAI net: Adsconex va SmartTraffic deu luu payload bai loi 5xx.
+        # Nhat CA BA net: Adsconex/Slink va SmartTraffic deu luu payload bai loi 5xx.
         pending_ads = []
+        pending_slink = []
         pending_st = []
-        if use_ads:
+        if is_ads:
             if not str(cfg.get("adsconex_api_key") or "").strip():
                 messagebox.showwarning(APP_NAME, "Chưa nhập Adsconex API Token trong tab Adsconex.")
                 return
             pending_ads = find_pending_adsconex(output_root, cfg)
+        elif is_slink:
+            if not str(cfg.get("slink_api_key") or "").strip():
+                messagebox.showwarning(APP_NAME, "Chưa nhập Slink API Token trong tab Slink.")
+                return
+            pending_slink = find_pending_slink(output_root, cfg)
         else:
             if not str(cfg.get("smarttraffic_api_key") or "").strip():
                 messagebox.showwarning(APP_NAME, "Chưa nhập SmartTraffic API Key trong tab SmartTraffic.")
                 return
             pending_st = find_pending_smarttraffic(output_root)
 
-        total = len(pending_ads) + len(pending_st)
+        total = len(pending_ads) + len(pending_slink) + len(pending_st)
         if not total:
             messagebox.showinfo(APP_NAME, f"Không có bài lỗi nào cần đăng lại trong:\n{output_root}")
             return
-        net_name = "Adsconex" if use_ads else "SmartTraffic"
+        net_name = ("Slink" if is_slink else ("Adsconex" if is_ads else "SmartTraffic"))
         if not messagebox.askyesno(
             APP_NAME,
             f"Tìm thấy {total} bài lỗi đã lưu payload trong:\n{output_root}\n\n"
@@ -7870,12 +8843,18 @@ class App(tk.Tk):
             retry_cfg = dict(cfg)
             retry_cfg["story_output_root"] = str(output_root)
             pipe = StoryPipeline(retry_cfg, self.log, self.progress)
-            jobs = ([(wd, pl, rs) for wd, pl, rs in pending_ads] if use_ads
-                    else [(wd, pl, None) for wd, pl in pending_st])
+            if is_ads:
+                jobs = [(wd, pl, rs) for wd, pl, rs in pending_ads]
+            elif is_slink:
+                jobs = [(wd, pl, None) for wd, pl in pending_slink]
+            else:
+                jobs = [(wd, pl, None) for wd, pl in pending_st]
             for work_dir, payload, resume in jobs:
                 try:
-                    if use_ads:
+                    if is_ads:
                         res = pipe.republish_pending(work_dir, payload, resume)
+                    elif is_slink:
+                        res = pipe.republish_pending_slink(work_dir, payload)
                     else:
                         res = pipe.republish_pending_smarttraffic(work_dir, payload)
                 except Exception as exc:
@@ -7952,7 +8931,8 @@ class App(tk.Tk):
                         output_root, sources,
                         cfg.get("net_provider", "SmartTraffic"),
                         cfg.get("site_host", ""),
-                        cfg.get("adsconex_site_host", ""))
+                        cfg.get("adsconex_site_host", ""),
+                        cfg.get("slink_site_host", ""))
                     # Do the API model probe once, before starting any per-video
                     # worker. Repeating it concurrently opens several SSL
                     # connections and may crash native libraries on some PCs.
@@ -8027,18 +9007,22 @@ class App(tk.Tk):
                                         f"Đã xử lý {len(rows)}/{len(sources)} | Lỗi {sum(r['status']=='failed' for r in rows)}"))
                     # ---- Dang lai cac bai 502 da luu payload (cuoi batch, origin da hoi) ----
                     # Khong ton Vision/Writer: chi gui lai dung payload da luu.
-                    # Nhat CA HAI net: Adsconex + SmartTraffic (moi net co file pending rieng).
-                    _use_ads = str(cfg.get("net_provider") or "").strip().lower().startswith("ads")
+                    # Nhat CA BA net: Adsconex, Slink + SmartTraffic (moi net co file pending rieng).
+                    _prov = str(cfg.get("net_provider") or "").strip().lower()
+                    _use_ads = _prov.startswith("ads")
+                    _use_slink = _prov.startswith("slink")
                     try:
                         if _use_ads:
                             pending = [(wd, pl, rs) for wd, pl, rs in find_pending_adsconex(output_root, cfg)]
+                        elif _use_slink:
+                            pending = [(wd, pl, None) for wd, pl in find_pending_slink(output_root, cfg)]
                         else:
                             pending = [(wd, pl, None) for wd, pl in find_pending_smarttraffic(output_root)]
                     except Exception:
                         pending = []
                     if pending:
                         self.log(f"BATCH: dang lai {len(pending)} bai loi da luu payload "
-                                 f"({'Adsconex' if _use_ads else 'SmartTraffic'}, khong ton Vision/Writer)...")
+                                 f"({'Slink' if _use_slink else ('Adsconex' if _use_ads else 'SmartTraffic')}, khong ton Vision/Writer)...")
                         retry_cfg = dict(cfg)
                         retry_cfg["story_output_root"] = str(output_root)
                         retry_pipe = StoryPipeline(retry_cfg, self.log, lambda *args: None)
@@ -8048,6 +9032,8 @@ class App(tk.Tk):
                             try:
                                 if _use_ads:
                                     res = retry_pipe.republish_pending(work_dir, payload, resume)
+                                elif _use_slink:
+                                    res = retry_pipe.republish_pending_slink(work_dir, payload)
                                 else:
                                     res = retry_pipe.republish_pending_smarttraffic(work_dir, payload)
                             except Exception as exc:
