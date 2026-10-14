@@ -1,5 +1,76 @@
 # TIẾP TỤC — Phong_DHue
 
+**Phiên bản hiện tại: v23.6.33** (cập nhật 2026-10-14)
+
+## Trạng thái: ĐANG CHẠY ỔN — ĐÃ PHÁT HÀNH
+- File chính: `viet_drama_V23.6_dashboard_thumbnail.py` (**LF-only**, 9.535 dòng, py_compile OK).
+- **GitHub = local = ổ Z** (commit `368000d`). Sync Z: **15/15 MD5 khớp**.
+- **KHÔNG được ghi đè config thật** — `~/.video_story_publisher_V23.6.json` (mtime 2026-10-13, nguyên vẹn).
+
+## v23.6.33 — THÊM NET SLINK (fableon) + NÚT PLAY TRẮNG
+
+### 1) Net đăng bài thứ 3: `Slink`
+Port **nguyên văn 18/18 hàm** từ `Phong_ADung` (`viet_drama_V22.99_stable_folder.py`).
+Đã đối chiếu từng hàm: giống hệt (chỉ lệch 1 ký tự thụt lề do vị trí chèn).
+
+**Hàm cấp module (11):** `SLINK_LOCALES`, `SLINK_PENDING_FILE`, `build_slink_chapters`,
+`find_pending_slink`, `published_slink_link`, `slink_clear_pending`, `slink_existing_slugs`,
+`slink_localized`, `slink_localized_value`, `slink_pending_path`, `slink_write_pending`.
+
+**Hàm cấp class (StoryPipeline):** `publish_slink`, `republish_pending_slink`, `_slink_headers`,
+`_slink_locale`, `_slink_send`.
+**Hàm cấp class (App):** `toggle_slink_key_edit`, `test_slink_token`, `fetch_slink_categories`,
+`show_slink_categories`.
+
+**Tích hợp GUI:** tab `Slink` (nb.add), combobox `Net đăng bài` = `("SmartTraffic", "Adsconex", "Slink")`,
+8 biến `slink_*` trong `self.vars`.
+
+**Chạy ở CẢ 3 chỗ:** nút "Đăng lại bài lỗi", cuối batch (`start_run`), và `publish_current` /
+`rename_published_video` / `active_publish_link`.
+
+**Đặc thù fableon (khác SmartTraffic):**
+- Đăng `mode=chapter` — mỗi chapter 1 request POST `/api/posts/chapter`.
+- Phân trang TRONG 1 chương bằng `{{nextpage}}` (KHÔNG dùng `<!--nextpage-->`).
+- Link bài dạng `/<slug>` (không có tiền tố `/blog/`).
+- Đa ngôn ngữ `en/vi/zh/ko` (`SLINK_LOCALES`).
+- API base `https://fableon.treeiq.biz/api`; site_id `724`.
+
+### 2) Kiểu logo thứ 3: `white` (nút play trắng)
+Asset PNG thật nhúng base64 (`_WHITE_PLAY_B64`) — **pixel-exact với ADung v22.100.22**.
+Thêm vào combobox "Kiểu logo": `play` / `logo` / **`white`**. **Mặc định VẪN TẮT.**
+
+### 3) Đẩy 13 bản vá còn kẹt lên GitHub
+Repo từng kẹt ở **v23.6.19**; 13 commit `v23.6.20 → v23.6.32` chưa từng được push
+(máy khác bấm "⬆ Cập nhật" sẽ **tụt** về 23.6.19). Nay đã lên đủ.
+**Lưu ý khi push lần sau:** remote đi trước local → `git reset --soft origin/main` rồi commit lại
+(backup ra NGOÀI git trước: `%LOCALAPPDATA%\Temp\dhue_v23633_prepush\`).
+
+## CHỨNG MINH KHÔNG CHẠM PHẦN ĐỌC VIDEO (máy Xeon)
+Diff `v23.6.32` → `v23.6.33`: **35 khối khác**, trong đó **33 khối chứa chữ `slink`**;
+2 khối còn lại nằm trong `republish_failed_posts` (đổi tên biến `use_ads` → `is_ads`).
+Đối chiếu vị trí: `_WHISPER_CHILD`, `ensure_packages`, `ctranslate2`, `configure_ffmpeg`,
+`HF_HUB_OFFLINE`, `extract_frames` — **tất cả nằm trong khối `equal` (không đổi)**.
+Đếm từ khoá đọc video: `whisper` 49=49, `cv2` 42=42, `ffprobe` 23=23, `HF_HUB_OFFLINE` 3=3,
+`OPENBLAS_NUM_THREADS` 3=3, `torch` 1=1 — **không lệch**.
+
+## ĐÃ TEST THẬT
+- `py_compile` + `ast.parse` OK (64.629 node).
+- **Build GUI thật:** `App()` init OK; notebook có 8 tab gồm `Slink`; combobox net có `Slink`;
+  `slink_key_entry`/`slink_edit_btn` tồn tại; 8 biến `slink_*` có trong `self.vars`.
+- `StoryPipeline.publish_slink` / `republish_pending_slink` / `_slink_headers` / `_slink_locale` /
+  `_slink_send` — đều callable.
+- `App.republish_failed_posts` + `App.start_run`: có `is_slink` / `_use_slink` / `find_pending_slink` /
+  `republish_pending_slink` **và vẫn giữ** SmartTraffic + Adsconex.
+- `test_slink_token` dùng **GET** `/posts` (đúng quy ước: không POST để dò).
+
+## CHƯA LÀM / CÒN TREO
+- Chưa chạy đăng bài Slink thật lên `fableon.treeiq.biz` (chỉ test cấu trúc + GUI).
+- Chưa test trên máy Xeon (máy kia) — chỉ mới đảm bảo phần đọc video không đổi.
+
+---
+
+# TIẾP TỤC — Phong_DHue
+
 **Phiên bản hiện tại: v23.6.32** (cập nhật 2026-10-13)
 
 ## Trạng thái: ĐANG CHẠY ỔN
