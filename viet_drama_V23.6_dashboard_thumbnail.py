@@ -364,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.33"
+APP_VERSION = "23.6.34"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -8749,6 +8749,7 @@ class App(tk.Tk):
                         messagebox.showinfo("Slink token", item[1])
                     else:
                         messagebox.showerror("Slink token", item[1])
+                elif item[0] == "adsconex_categories":
                     self.show_adsconex_categories(item[1])
                 elif item[0] == "adsconex_republish_done":
                     ok, fail = item[1]

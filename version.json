@@ -1,5 +1,5 @@
 {
-  "version": "23.6.33",
-  "notes": "THEM NET SLINK (fableon) + NUT PLAY TRANG. (1) Net dang bai thu 3 'Slink': dang mode=chapter qua REST API fableon, da ngon ngu en/vi/zh/ko, luu payload bai loi 5xx de dang lai, chay o CA 3 cho (nut Dang lai bai loi + cuoi batch + combobox Net dang bai) - SmartTraffic/Adsconex giu nguyen 100%. (2) Kieu logo thu 3 'white': nut play trang kieu overlay Facebook (asset PNG nhu ADung), mac dinh VAN TAT. (3) Day luon 13 ban va 23.6.20->32 truoc do chua tung len GitHub (may khac bam Cap nhat se bi tut ve 23.6.19). Phan doc video/Whisper/Vision cua may Xeon KHONG doi mot dong nao.",
+  "version": "23.6.34",
+  "notes": "FIX LOI GUI: thieu dong elif adsconex_categories trong _poll_queue khien bam Lay danh muc Adsconex bao 'too many values to unpack'",
   "date": "2026-10-14"
 }
