@@ -364,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.35"
+APP_VERSION = "23.6.36"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -652,6 +652,9 @@ DEFAULT_CONFIG = {
     "vilao_api_key": "",
     "vision_model": "gpt-5.5",
     "writer_model": "gpt-6-sol",
+    # Tran max_tokens khi phai tang dan vi model reasoning lam cat response
+    # (finish_reason="length"). 0/rong -> dung 16000.
+    "writer_max_tokens_cap": "16000",
     "story_prompt_text": DEFAULT_STORY_PROMPT,
     "filename_phrase_list": DEFAULT_FILENAME_PHRASES,
     "smarttraffic_api_key": "",
@@ -3632,6 +3635,31 @@ class TranscriptSegment:
     global_end: float
 
 
+def chat_finish_reason(response) -> str:
+    """Doc finish_reason tu response (SDK object hoac dict).
+
+    "length" nghia la model bi CAT GIUA CHUNG vi het max_tokens. Rat hay gap o
+    model reasoning: no viet phan suy nghi truoc, het token truoc khi kip ra JSON.
+    """
+    try:
+        choices = getattr(response, "choices", None)
+        if choices:
+            reason = getattr(choices[0], "finish_reason", None)
+            if reason:
+                return str(reason)
+    except Exception:
+        pass
+    if isinstance(response, dict):
+        try:
+            first = (response.get("choices") or [{}])[0] or {}
+            reason = first.get("finish_reason")
+            if reason:
+                return str(reason)
+        except Exception:
+            pass
+    return ""
+
+
 class StoryPipeline:
     def __init__(self, cfg: dict, log_cb=None, progress_cb=None):
         self.cfg = cfg
@@ -4183,12 +4211,26 @@ Do not invent unsupported events. Keep chronology. Use neutral role labels if na
         """Robust GPT/Vilao JSON call with retries and fresh client per attempt."""
         retries = max(2, min(5, int(self.cfg.get("chapter_retry_count", 3) or 3)))
         last_error = None
+        # Model reasoning co the an het token vao phan suy nghi -> response bi cat
+        # (finish_reason="length") va khong con JSON. Khi do phai TANG ngan sach
+        # token roi thu lai; thu lai y nguyen max_tokens cu se lap lai y het.
+        cap = int(self.cfg.get("writer_max_tokens_cap", 16000) or 16000)
+        cap = max(cap, int(max_tokens))
+        budget = max(256, int(max_tokens))
+        strict_json = False
 
         for attempt in range(1, retries + 1):
+            finish_reason = ""
             try:
                 client = self._new_writer_client()
-                self._log(f"{label}: API attempt {attempt}/{retries}")
+                self._log(f"{label}: API attempt {attempt}/{retries} | max_tokens={budget}")
                 lang_note = language_instruction(effective_language(self.cfg))
+                strict_note = (
+                    "\n\nCRITICAL: Output ONLY the raw JSON object. Do not write any reasoning, "
+                    "planning, analysis or explanation before or after the JSON. "
+                    "Start your reply with '{' and end with '}'."
+                    if strict_json else ""
+                )
                 rsp = client.chat.completions.create(
                     model=self.cfg["writer_model"].strip(),
                     messages=[
@@ -4202,6 +4244,7 @@ Do not invent unsupported events. Keep chronology. Use neutral role labels if na
                                 + strip_language_rules(self.cfg["story_prompt_text"],
                                                        effective_language(self.cfg))
                                 + lang_note
+                                + strict_note
                                 + (
                                     "\n\nAPPROVED VIDEO SCRIPT — LOCKED SOURCE FOR THE HOOK. "
                                     "The chapter scenes and caption must match these characters, "
@@ -4214,16 +4257,36 @@ Do not invent unsupported events. Keep chronology. Use neutral role labels if na
                         {"role": "user", "content": prompt},
                     ],
                     temperature=temperature,
-                    max_tokens=max_tokens,
+                    max_tokens=budget,
                 )
+                finish_reason = chat_finish_reason(rsp)
                 raw = extract_chat_content(rsp, label)
+                if "{" not in raw:
+                    raise RuntimeError(
+                        f"{label}: model trả về văn bản suy nghĩ, không có JSON "
+                        f"(finish_reason={finish_reason or 'unknown'})."
+                    )
                 obj = parse_json_lenient(raw)
                 if not isinstance(obj, dict):
                     raise RuntimeError(f"{label}: parsed response is not a JSON object")
+                if finish_reason == "length":
+                    self._log(
+                        f"WARNING {label}: JSON đọc được nhưng response bị cắt "
+                        f"(finish_reason=length) — vẫn dùng, nên tăng max_tokens nếu thiếu dữ liệu."
+                    )
                 return obj
             except Exception as e:
                 last_error = e
                 self._log(f"WARNING {label} attempt {attempt} failed: {e}")
+                if finish_reason == "length" and budget < cap:
+                    new_budget = min(cap, budget * 2)
+                    self._log(
+                        f"{label}: response bị cắt vì hết token "
+                        f"(finish_reason=length, max_tokens={budget}) "
+                        f"→ thử lại với max_tokens={new_budget}"
+                    )
+                    budget = new_budget
+                strict_json = True
                 if attempt < retries:
                     delay = min(18, 3 * (2 ** (attempt - 1)))
                     time.sleep(delay)

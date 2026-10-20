@@ -1,12 +1,40 @@
 # TIẾP TỤC — Phong_DHue
 
-**Cập nhật lần cuối:** 2026-10-15 00:35
-**Phiên bản hiện tại:** **v23.6.35** (worktree + GitHub + ổ Z — tất cả khớp)
-**File chính:** `viet_drama_V23.6_dashboard_thumbnail.py` (9.543 dòng, **CRLF**, single-file)
+**Cập nhật lần cuối:** 2026-10-20
+**Phiên bản hiện tại:** **v23.6.36** (worktree + GitHub + ổ Z — tất cả khớp)
+**File chính:** `viet_drama_V23.6_dashboard_thumbnail.py` (**LF-only**, single-file)
 
 ---
 
-## ✅ VỪA XONG (v23.6.35 — phần ngôn ngữ giống ADung)
+## ✅ VỪA XONG (v23.6.36 — fix Story Architecture bị cắt vì hết token)
+
+**Triệu chứng:** hộp thoại đỏ
+`Story architecture failed after 3 attempts: Story architecture: API response did not contain usable choices/message/content.`
+Kèm `Response preview` có `"finish_reason": "length"` và `content` chỉ là đoạn suy nghĩ
+(`We need to produce JSON with story architecture...`), không có JSON.
+
+**Nguyên nhân:** model **reasoning** viết phần suy nghĩ trước, ăn hết `max_tokens=4000`
+trước khi kịp ra JSON. Tool cũ **thử lại y nguyên `max_tokens` cũ** → lặp lại y hệt → hỏng cả 3 lần.
+
+**Đã sửa trong `_writer_json_call`:**
+1. Thêm `chat_finish_reason(response)` — đọc `finish_reason` từ cả SDK object lẫn dict.
+2. Khi bị cắt → **tự động tăng gấp đôi** `max_tokens` (4000 → 8000 → 16000), không thử lại y nguyên.
+3. Phát hiện content **không có JSON** → báo lỗi rõ ràng thay vì "không có choices".
+4. Từ lần thử lại, thêm chỉ thị `Output ONLY the raw JSON object... Start your reply with { and end with }`.
+5. Trần trên cùng qua key mới `writer_max_tokens_cap` (mặc định 16000) — để trong `DEFAULT_CONFIG`,
+   **KHÔNG ghim** trong `FIXED_PRODUCTION_SETTINGS` (bài học: ghim là user không đổi được).
+
+**Đã test:**
+- Mô phỏng **đúng lỗi trong ảnh** → cứu được bài ở lần 3 với `max_tokens=16000` ✓
+- Dừng đúng ở trần, không tăng vô hạn ✓
+- Trường hợp bình thường (`finish_reason=stop`) vẫn gọi **1 lần**, giữ nguyên `max_tokens` ✓
+- `py_compile` OK
+
+**Lưu ý:** bản này làm trên nền **v23.6.35** (file trong thư mục đã lên .35 từ 15/10, git local còn .32).
+
+---
+
+## ✅ ĐÃ XONG (v23.6.35 — phần ngôn ngữ giống ADung)
 
 Yêu cầu: *"phần ngôn ngữ sửa lại giống ADung cho a"*
 

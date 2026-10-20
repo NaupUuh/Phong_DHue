@@ -31,3 +31,6 @@ venv/
 *.log
 *.bak
 *.part
+
+# Thu muc backup ban cu (giu local, khong dua len git)
+_backup_old/
