@@ -1,12 +1,35 @@
 # TIẾP TỤC — Phong_DHue
 
 **Cập nhật lần cuối:** 2026-10-20
-**Phiên bản hiện tại:** **v23.6.36** (worktree + GitHub + ổ Z — tất cả khớp)
+**Phiên bản hiện tại:** **v23.6.37** (worktree + GitHub + ổ Z — tất cả khớp)
 **File chính:** `viet_drama_V23.6_dashboard_thumbnail.py` (**LF-only**, single-file)
 
 ---
 
-## ✅ VỪA XONG (v23.6.36 — fix Story Architecture bị cắt vì hết token)
+## ✅ VỪA XONG (v23.6.37 — tăng tốc viết blog)
+
+Đo thật 1 bài 3:44 (video 30s): trích frame **26s** · vision **10s** · **viết truyện 2:00 (54%)** · caption 7s · upload 2s · đăng bài **48s**.
+
+**Nút thắt là khâu viết.** Trước: 2 chương/request + chỉ **2 batch song song** → 10 chương = 5 request = **3 đợt nối tiếp**, đợt cuối chỉ 1 batch nên 3 worker ngồi chờ.
+
+**Đã sửa:**
+1. **Chia đều batch** — 10 chương → `[3,3,2,2]` thay vì `[2,2,2,2,2]`; không còn batch lẻ 1 chương.
+2. **Chạy 4 batch song song** → 4 request = **1 đợt duy nhất**.
+3. `max_tokens` tính theo số chương (1500 token/chương) thay vì ghim 5200 → 3–4 chương/batch không bị cắt.
+4. `frame_workers` 4 → 8.
+
+**Đo mô phỏng:** 3 đợt → **1 đợt**, khâu viết nhanh hơn **66%**.
+
+**Key mới (đều ở `DEFAULT_CONFIG`, KHÔNG ghim FIXED):**
+- `writer_chapters_per_batch` = `3` (đặt `2` để quay lại hành vi cũ)
+- `writer_parallel_batches` = `4` (đặt `2` để quay lại)
+- `frame_workers` = `8`
+
+**Đã test:** 6–10 chương chia đều đúng, không batch lẻ; 10 chương → 1 đợt; `max_tokens` đủ cho 2/3/4 chương; `py_compile` OK.
+
+---
+
+## ✅ ĐÃ XONG (v23.6.36 — fix Story Architecture bị cắt vì hết token)
 
 **Triệu chứng:** hộp thoại đỏ
 `Story architecture failed after 3 attempts: Story architecture: API response did not contain usable choices/message/content.`

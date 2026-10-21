@@ -364,7 +364,7 @@ CRASH_LOG_FILE = Path.cwd() / "video_story_publisher_crash_V23.6.log"
 
 # Phiên bản tool. updater.py đọc dòng này để so với version.json trên GitHub;
 # release.py tự ghi lại mỗi lần phát hành bản mới.
-APP_VERSION = "23.6.36"
+APP_VERSION = "23.6.37"
 
 def _write_crash_log(title: str, exc_type=None, exc_value=None, exc_tb=None, extra: str = ""):
     """Write fatal/unhandled errors to a persistent text file."""
@@ -655,6 +655,10 @@ DEFAULT_CONFIG = {
     # Tran max_tokens khi phai tang dan vi model reasoning lam cat response
     # (finish_reason="length"). 0/rong -> dung 16000.
     "writer_max_tokens_cap": "16000",
+    # Toc do viet truyen: so chuong moi request va so request chay cung luc.
+    # 2 chuong/batch la an toan nhat; 3-4 nhanh hon nhung de lech mach hon.
+    "writer_chapters_per_batch": "3",
+    "writer_parallel_batches": "4",
     "story_prompt_text": DEFAULT_STORY_PROMPT,
     "filename_phrase_list": DEFAULT_FILENAME_PHRASES,
     "smarttraffic_api_key": "",
@@ -730,7 +734,7 @@ DEFAULT_CONFIG = {
     "require_thumbnail_before_publish": True,
     "fast_whisper_beam_size": "1",
     "skip_audio_extract": True,
-    "frame_workers": "4",
+    "frame_workers": "8",
     "vision_parallel_workers": "2",
     "cloudinary_workers": "4",
     "ffmpeg_bin": r"C:\\ffmpeg-9.0.1-essentials_build\\bin",
@@ -4383,7 +4387,12 @@ JSON SCHEMA:
         obj = self._writer_json_call(
             f"Writer chapters {nums[0]}-{nums[-1]}",
             prompt,
-            max_tokens=5200,
+            # ~700 tu/chuong; 1 token ~ 0.75 tu -> can >= 1100 token/chuong.
+            # Cong phan JSON + du phong, va tran theo writer_max_tokens_cap.
+            max_tokens=min(
+                int(self.cfg.get("writer_max_tokens_cap", 16000) or 16000),
+                max(2600, 1500 * len(batch)),
+            ),
             temperature=0.42,
         )
         chapters = obj.get("chapters") or []
@@ -4683,12 +4692,25 @@ Return STRICT JSON only:
             self._log(f"2-video mapping: Video 1 -> {first_count} chapters; Video 2 -> {chapter_count-first_count} chapters")
 
         chapter_sources = self._chapter_source_payload(analysis, transcript, plan)
-        batches = [chapter_sources[i:i + 2] for i in range(0, chapter_count, 2)]
+        # So chuong moi batch: 2 la an toan cu; tang len 3-4 thi it request hon
+        # -> nhanh hon nhieu nhung de bi cat token / lech mach hon.
+        per_batch = max(1, min(4, int(self.cfg.get("writer_chapters_per_batch", 3) or 3)))
+        # Chia DEU thay vi cat khuc: 10 chuong / 3 -> [3,3,2,2] chu khong phai
+        # [3,3,3,1] (batch cuoi 1 chuong vua lang phi vua de lech mach).
+        batch_total = max(1, -(-chapter_count // per_batch))
+        base, extra = divmod(chapter_count, batch_total)
+        batches, cursor = [], 0
+        for bi in range(batch_total):
+            size = base + (1 if bi < extra else 0)
+            batches.append(chapter_sources[cursor:cursor + size])
+            cursor += size
 
         self.progress(70, f"Writing {chapter_count} chapters")
         fast_batches = bool(self.cfg.get("fast_writer_batches", True))
-        self._log(f"Writer: {len(batches)} batches; "
-                  f"{'2 parallel batches per wave' if fast_batches else 'sequential'}; retries enabled")
+        # So batch chay cung luc. Truoc day ghim cung 2 -> 5 batch phai chia 3 dot.
+        wave_size = max(1, min(8, int(self.cfg.get("writer_parallel_batches", 4) or 4))) if fast_batches else 1
+        self._log(f"Writer: {len(batches)} batches x {per_batch} chuong; "
+                  f"{'song song ' + str(wave_size) + ' batch/dot' if fast_batches else 'tuan tu'}; retries enabled")
 
         collected = {}
         batch_errors = []
@@ -4717,8 +4739,8 @@ Return STRICT JSON only:
             self._log(f"Batch Ch{nums[0]}-{nums[-1]} finished | got {len(result)} chapter object(s)")
 
         if fast_batches:
-            for wave in range(0, len(batches), 2):
-                wave_batches = batches[wave:wave + 2]
+            for wave in range(0, len(batches), wave_size):
+                wave_batches = batches[wave:wave + wave_size]
                 context = prior_context()
                 with ThreadPoolExecutor(max_workers=len(wave_batches)) as ex:
                     futures = {ex.submit(self._write_chapter_batch, analysis, batch, context): batch
